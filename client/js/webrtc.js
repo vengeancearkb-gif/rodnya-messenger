@@ -6,11 +6,10 @@ class CallManager {
     this.remoteStream = null;
     this.currentCallTarget = null;
     this.pendingOffer = null;
-    this.iceCandidatesQueue = []; // Queues ICE candidates until remote description is ready
+    this.iceCandidatesQueue = [];
     this.callTimerInterval = null;
     this.callSeconds = 0;
     this.isMuted = false;
-    this.audioContext = null;
 
     // High quality public STUN & TURN servers for international NAT traversal (including mobile 4G/5G)
     this.rtcConfig = {
@@ -49,6 +48,7 @@ class CallManager {
     this.callContactName = document.getElementById('call-contact-name');
     this.callStatusLabel = document.getElementById('call-status-label');
     this.callTimer = document.getElementById('call-timer');
+    this.btnUnmuteCall = document.getElementById('btn-unmute-call');
     this.btnToggleMic = document.getElementById('btn-toggle-mic');
     this.btnEndCall = document.getElementById('btn-end-call');
 
@@ -64,6 +64,29 @@ class CallManager {
     this.btnEndCall.addEventListener('click', () => this.endCall(true));
     this.btnAcceptCall.addEventListener('click', () => this.acceptIncomingCall());
     this.btnRejectCall.addEventListener('click', () => this.rejectIncomingCall());
+
+    if (this.btnUnmuteCall) {
+      this.btnUnmuteCall.addEventListener('click', () => {
+        this.unlockAndPlayAudio();
+        this.btnUnmuteCall.classList.add('hidden');
+      });
+    }
+  }
+
+  // Ensure remote audio element is unmuted and playing
+  unlockAndPlayAudio() {
+    if (!this.remoteAudio) return;
+    this.remoteAudio.muted = false;
+    this.remoteAudio.volume = 1.0;
+    const playPromise = this.remoteAudio.play();
+    if (playPromise !== undefined) {
+      playPromise.then(() => {
+        if (this.btnUnmuteCall) this.btnUnmuteCall.classList.add('hidden');
+      }).catch(err => {
+        console.warn('Audio play request:', err);
+        if (this.btnUnmuteCall) this.btnUnmuteCall.classList.remove('hidden');
+      });
+    }
   }
 
   // Get local mic stream safely
@@ -78,7 +101,7 @@ class CallManager {
         video: false
       });
     } catch (e) {
-      console.warn('Retrying getUserMedia with simple audio: true', e);
+      console.warn('Retrying getUserMedia with audio: true', e);
       return await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     }
   }
@@ -89,6 +112,9 @@ class CallManager {
     this.currentCallTarget = { id: targetUserId, name: targetUsername };
     this.iceCandidatesQueue = [];
 
+    // Pre-unlock audio element in user gesture context
+    this.unlockAndPlayAudio();
+
     try {
       this.localStream = await this.acquireMicrophone();
     } catch (err) {
@@ -96,19 +122,19 @@ class CallManager {
       return;
     }
 
-    this.showCallScreen(targetUsername, 'Вызов близких...');
+    this.showCallScreen(targetUsername, 'Вызов...');
     this.createPeerConnection();
 
     // Add local audio tracks to peer connection
     this.localStream.getTracks().forEach(track => {
+      track.enabled = true;
       this.peerConnection.addTrack(track, this.localStream);
     });
 
     try {
       const offer = await this.peerConnection.createOffer({
         offerToReceiveAudio: true,
-        offerToReceiveVideo: false,
-        voiceActivityDetection: true
+        offerToReceiveVideo: false
       });
       await this.peerConnection.setLocalDescription(offer);
 
@@ -143,6 +169,9 @@ class CallManager {
     window.soundManager.stopRingtone();
     this.incomingDialog.classList.add('hidden');
 
+    // Pre-unlock audio in user gesture context
+    this.unlockAndPlayAudio();
+
     if (!this.pendingOffer) return;
     const { fromUserId, fromUsername, offer } = this.pendingOffer;
     this.currentCallTarget = { id: fromUserId, name: fromUsername };
@@ -160,6 +189,7 @@ class CallManager {
     this.createPeerConnection();
 
     this.localStream.getTracks().forEach(track => {
+      track.enabled = true;
       this.peerConnection.addTrack(track, this.localStream);
     });
 
@@ -177,7 +207,6 @@ class CallManager {
       });
 
       this.startCallTimer();
-      this.callStatusLabel.textContent = 'Идёт разговор';
     } catch (err) {
       console.error('Error answering call:', err);
       this.endCall(true);
@@ -205,7 +234,6 @@ class CallManager {
       await this.peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
       await this.drainIceCandidates();
       this.startCallTimer();
-      this.callStatusLabel.textContent = 'Идёт разговор';
     } catch (err) {
       console.error('Error setting remote answer:', err);
     }
@@ -263,53 +291,51 @@ class CallManager {
     // When remote audio track arrives:
     this.peerConnection.ontrack = (event) => {
       console.log('Received remote audio track:', event.track);
+
+      // Safe stream resolution: supports both event.streams and event.track
+      let stream = null;
       if (event.streams && event.streams[0]) {
-        const stream = event.streams[0];
+        stream = event.streams[0];
+      } else if (event.track) {
+        stream = new MediaStream([event.track]);
+      }
+
+      if (stream) {
         this.remoteStream = stream;
-
-        // 1. Play through HTML5 audio element
         this.remoteAudio.srcObject = stream;
-        this.remoteAudio.volume = 1.0;
-        const playPromise = this.remoteAudio.play();
-        if (playPromise !== undefined) {
-          playPromise.catch(err => {
-            console.warn('HTML5 audio play error:', err);
-          });
-        }
+        this.unlockAndPlayAudio();
 
-        // 2. Route through Web Audio API to bypass mobile autoplay/routing restrictions
-        try {
-          const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-          if (AudioContextClass) {
-            if (!this.audioContext || this.audioContext.state === 'closed') {
-              this.audioContext = new AudioContextClass();
-            }
-            if (this.audioContext.state === 'suspended') {
-              this.audioContext.resume();
-            }
-            const source = this.audioContext.createMediaStreamSource(stream);
-            source.connect(this.audioContext.destination);
+        // Check if audio plays, if paused show button
+        setTimeout(() => {
+          if (this.remoteAudio.paused && this.btnUnmuteCall) {
+            this.btnUnmuteCall.classList.remove('hidden');
           }
-        } catch (e) {
-          console.warn('Web Audio routing notice:', e);
-        }
+        }, 1000);
       }
     };
 
-    this.peerConnection.onconnectionstatechange = () => {
+    const updateConnectionStatus = () => {
       if (!this.peerConnection) return;
       const state = this.peerConnection.connectionState;
-      console.log('WebRTC connection state:', state);
-      if (state === 'connected') {
-        this.callStatusLabel.textContent = 'Соединено (HD Голос)';
-      } else if (state === 'disconnected') {
-        this.callStatusLabel.textContent = 'Связь потеряна...';
-      } else if (state === 'failed') {
-        this.callStatusLabel.textContent = 'Ошибка связи';
+      const iceState = this.peerConnection.iceConnectionState;
+      console.log('WebRTC connection state:', state, 'ICE:', iceState);
+
+      if (state === 'connected' || iceState === 'connected' || iceState === 'completed') {
+        this.callStatusLabel.textContent = 'Идёт разговор (Соединено)';
+        this.unlockAndPlayAudio();
+      } else if (iceState === 'checking') {
+        this.callStatusLabel.textContent = 'Установка защищённого соединения...';
+      } else if (state === 'failed' || iceState === 'failed') {
+        this.callStatusLabel.textContent = 'Ошибка P2P соединения';
+      } else if (state === 'disconnected' || iceState === 'disconnected') {
+        this.callStatusLabel.textContent = 'Переподключение связи...';
       } else if (state === 'closed') {
         this.endCall(false);
       }
     };
+
+    this.peerConnection.onconnectionstatechange = updateConnectionStatus;
+    this.peerConnection.oniceconnectionstatechange = updateConnectionStatus;
   }
 
   // Toggle local microphone mute
@@ -347,6 +373,7 @@ class CallManager {
     this.callTimer.textContent = '00:00';
     this.isMuted = false;
     this.btnToggleMic.classList.remove('muted');
+    if (this.btnUnmuteCall) this.btnUnmuteCall.classList.add('hidden');
     this.callScreen.classList.remove('hidden');
   }
 
@@ -372,14 +399,8 @@ class CallManager {
     }
 
     if (this.remoteAudio) {
+      this.remoteAudio.pause();
       this.remoteAudio.srcObject = null;
-    }
-
-    if (this.audioContext) {
-      try {
-        this.audioContext.close();
-      } catch (e) {}
-      this.audioContext = null;
     }
 
     if (this.peerConnection) {
@@ -390,6 +411,7 @@ class CallManager {
     this.iceCandidatesQueue = [];
     this.currentCallTarget = null;
     this.pendingOffer = null;
+    if (this.btnUnmuteCall) this.btnUnmuteCall.classList.add('hidden');
     this.callScreen.classList.add('hidden');
     this.incomingDialog.classList.add('hidden');
   }

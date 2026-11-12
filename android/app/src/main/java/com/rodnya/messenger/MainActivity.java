@@ -6,25 +6,36 @@ import android.content.pm.PackageManager;
 import android.media.AudioManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.webkit.PermissionRequest;
 import android.webkit.WebSettings;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import com.getcapacitor.BridgeActivity;
+import com.getcapacitor.BridgeWebChromeClient;
 
 public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // Allow WebRTC audio and video to play automatically without blocking
+        // Enable WebRTC audio autoplay and grant permissions directly to WebView
         try {
             if (getBridge() != null && getBridge().getWebView() != null) {
                 WebSettings webSettings = getBridge().getWebView().getSettings();
                 webSettings.setMediaPlaybackRequiresUserGesture(false);
+
+                getBridge().getWebView().setWebChromeClient(new BridgeWebChromeClient(getBridge()) {
+                    @Override
+                    public void onPermissionRequest(final PermissionRequest request) {
+                        runOnUiThread(() -> {
+                            request.grant(request.getResources());
+                        });
+                    }
+                });
             }
         } catch (Exception ignored) {}
 
-        // Enable VoIP audio routing to loudspeaker / communication mode
+        // Configure audio manager for VoIP communication
         try {
             AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
             if (audioManager != null) {
