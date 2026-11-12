@@ -4,7 +4,7 @@ class MessengerApp {
     this.socket = null;
     this.username = localStorage.getItem('family_username') || '';
     this.roomId = localStorage.getItem('family_room') || 'semya';
-    this.serverUrl = localStorage.getItem('family_server_url') || '';
+    this.serverUrl = localStorage.getItem('family_server_url') || 'https://rodnya-messenger.onrender.com';
     this.onlineMembers = [];
     this.pingInterval = null;
 
@@ -108,7 +108,7 @@ class MessengerApp {
       this.serverInput.value = this.serverUrl;
       this.connect();
     } else {
-      this.serverInput.value = window.location.origin.includes('http') ? window.location.origin : '';
+      this.serverInput.value = this.serverUrl || 'https://rodnya-messenger.onrender.com';
     }
   }
 
