@@ -22,11 +22,31 @@ if (!fs.existsSync(uploadsDir)) {
 // Serve uploaded files
 app.use('/uploads', express.static(uploadsDir));
 
-// Serve client static files if client folder exists
+// Serve client static files
+const publicDir = path.join(__dirname, 'public');
 const clientDir = path.join(__dirname, '..', 'client');
-if (fs.existsSync(clientDir)) {
+
+if (fs.existsSync(publicDir)) {
+  app.use(express.static(publicDir));
+} else if (fs.existsSync(clientDir)) {
   app.use(express.static(clientDir));
 }
+
+// Fallback to index.html for root or SPA routing
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api') || req.path.startsWith('/uploads') || req.path.startsWith('/socket.io')) {
+    return next();
+  }
+  const publicIndex = path.join(publicDir, 'index.html');
+  if (fs.existsSync(publicIndex)) {
+    return res.sendFile(publicIndex);
+  }
+  const clientIndex = path.join(clientDir, 'index.html');
+  if (fs.existsSync(clientIndex)) {
+    return res.sendFile(clientIndex);
+  }
+  next();
+});
 
 // Configure Multer for file/voice/image uploads
 const storage = multer.diskStorage({
