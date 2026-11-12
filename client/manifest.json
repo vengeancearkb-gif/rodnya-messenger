@@ -1,0 +1,16 @@
+{
+  "short_name": "Родня",
+  "name": "Родня — Семейный Мессенджер",
+  "icons": [
+    {
+      "src": "assets/icon.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#0f172a",
+  "theme_color": "#18181b",
+  "display": "standalone",
+  "orientation": "portrait"
+}
