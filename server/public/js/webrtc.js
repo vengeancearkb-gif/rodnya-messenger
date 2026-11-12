@@ -1,4 +1,4 @@
-// WebRTC 1-on-1 Audio Call Manager
+// WebRTC 1-on-1 Audio Call Manager (Optimized for Mobile & International Traversal)
 class CallManager {
   constructor() {
     this.peerConnection = null;
@@ -6,18 +6,39 @@ class CallManager {
     this.remoteStream = null;
     this.currentCallTarget = null;
     this.pendingOffer = null;
+    this.iceCandidatesQueue = []; // Queues ICE candidates until remote description is ready
     this.callTimerInterval = null;
     this.callSeconds = 0;
     this.isMuted = false;
+    this.audioContext = null;
 
-    // High quality public STUN servers for international NAT traversal
+    // High quality public STUN & TURN servers for international NAT traversal (including mobile 4G/5G)
     this.rtcConfig = {
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
         { urls: 'stun:stun2.l.google.com:19302' },
-        { urls: 'stun:stun.cloudflare.com:3478' }
-      ]
+        { urls: 'stun:stun3.l.google.com:19302' },
+        { urls: 'stun:stun4.l.google.com:19302' },
+        { urls: 'stun:stun.cloudflare.com:3478' },
+        { urls: 'stun:openrelay.metered.ca:80' },
+        {
+          urls: 'turn:openrelay.metered.ca:80',
+          username: 'openrelay',
+          credential: 'openrelay'
+        },
+        {
+          urls: 'turn:openrelay.metered.ca:443',
+          username: 'openrelay',
+          credential: 'openrelay'
+        },
+        {
+          urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+          username: 'openrelay',
+          credential: 'openrelay'
+        }
+      ],
+      iceCandidatePoolSize: 10
     };
 
     this.initDOM();
@@ -45,13 +66,10 @@ class CallManager {
     this.btnRejectCall.addEventListener('click', () => this.rejectIncomingCall());
   }
 
-  // Start outgoing audio call to a user
-  async startCall(targetUserId, targetUsername) {
-    if (this.peerConnection) return;
-    this.currentCallTarget = { id: targetUserId, name: targetUsername };
-
+  // Get local mic stream safely
+  async acquireMicrophone() {
     try {
-      this.localStream = await navigator.mediaDevices.getUserMedia({
+      return await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
@@ -59,6 +77,20 @@ class CallManager {
         },
         video: false
       });
+    } catch (e) {
+      console.warn('Retrying getUserMedia with simple audio: true', e);
+      return await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    }
+  }
+
+  // Start outgoing audio call to a user
+  async startCall(targetUserId, targetUsername) {
+    if (this.peerConnection) return;
+    this.currentCallTarget = { id: targetUserId, name: targetUsername };
+    this.iceCandidatesQueue = [];
+
+    try {
+      this.localStream = await this.acquireMicrophone();
     } catch (err) {
       alert('Ошибка доступа к микрофону: ' + (err.message || err.name));
       return;
@@ -75,7 +107,8 @@ class CallManager {
     try {
       const offer = await this.peerConnection.createOffer({
         offerToReceiveAudio: true,
-        offerToReceiveVideo: false
+        offerToReceiveVideo: false,
+        voiceActivityDetection: true
       });
       await this.peerConnection.setLocalDescription(offer);
 
@@ -92,7 +125,6 @@ class CallManager {
   // Handle incoming call notification
   handleIncomingCall({ fromUserId, fromUsername, offer }) {
     if (this.peerConnection) {
-      // Busy
       window.messengerApp.socket.emit('call-reject', {
         targetUserId: fromUserId,
         reason: 'Занят'
@@ -117,14 +149,7 @@ class CallManager {
     this.pendingOffer = null;
 
     try {
-      this.localStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        },
-        video: false
-      });
+      this.localStream = await this.acquireMicrophone();
     } catch (err) {
       alert('Не удалось включить микрофон: ' + (err.message || err.name));
       this.rejectIncomingCall();
@@ -140,6 +165,9 @@ class CallManager {
 
     try {
       await this.peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+      // Drain any ICE candidates received while incoming call dialog was showing!
+      await this.drainIceCandidates();
+
       const answer = await this.peerConnection.createAnswer();
       await this.peerConnection.setLocalDescription(answer);
 
@@ -175,6 +203,7 @@ class CallManager {
     if (!this.peerConnection) return;
     try {
       await this.peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+      await this.drainIceCandidates();
       this.startCallTimer();
       this.callStatusLabel.textContent = 'Идёт разговор';
     } catch (err) {
@@ -193,11 +222,27 @@ class CallManager {
 
   // ICE Candidate received
   async handleIceCandidate({ fromUserId, candidate }) {
-    if (this.peerConnection && candidate) {
+    if (!candidate) return;
+
+    if (this.peerConnection && this.peerConnection.remoteDescription && this.peerConnection.remoteDescription.type) {
       try {
         await this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
       } catch (e) {
         console.warn('Error adding ICE candidate:', e);
+      }
+    } else {
+      // Queue until remoteDescription is set!
+      this.iceCandidatesQueue.push(candidate);
+    }
+  }
+
+  async drainIceCandidates() {
+    while (this.iceCandidatesQueue.length > 0) {
+      const candidate = this.iceCandidatesQueue.shift();
+      try {
+        await this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (e) {
+        console.warn('Error adding queued ICE candidate:', e);
       }
     }
   }
@@ -215,19 +260,52 @@ class CallManager {
       }
     };
 
+    // When remote audio track arrives:
     this.peerConnection.ontrack = (event) => {
+      console.log('Received remote audio track:', event.track);
       if (event.streams && event.streams[0]) {
-        this.remoteAudio.srcObject = event.streams[0];
+        const stream = event.streams[0];
+        this.remoteStream = stream;
+
+        // 1. Play through HTML5 audio element
+        this.remoteAudio.srcObject = stream;
+        this.remoteAudio.volume = 1.0;
+        const playPromise = this.remoteAudio.play();
+        if (playPromise !== undefined) {
+          playPromise.catch(err => {
+            console.warn('HTML5 audio play error:', err);
+          });
+        }
+
+        // 2. Route through Web Audio API to bypass mobile autoplay/routing restrictions
+        try {
+          const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+          if (AudioContextClass) {
+            if (!this.audioContext || this.audioContext.state === 'closed') {
+              this.audioContext = new AudioContextClass();
+            }
+            if (this.audioContext.state === 'suspended') {
+              this.audioContext.resume();
+            }
+            const source = this.audioContext.createMediaStreamSource(stream);
+            source.connect(this.audioContext.destination);
+          }
+        } catch (e) {
+          console.warn('Web Audio routing notice:', e);
+        }
       }
     };
 
     this.peerConnection.onconnectionstatechange = () => {
       if (!this.peerConnection) return;
       const state = this.peerConnection.connectionState;
+      console.log('WebRTC connection state:', state);
       if (state === 'connected') {
         this.callStatusLabel.textContent = 'Соединено (HD Голос)';
-      } else if (state === 'disconnected' || state === 'failed') {
+      } else if (state === 'disconnected') {
         this.callStatusLabel.textContent = 'Связь потеряна...';
+      } else if (state === 'failed') {
+        this.callStatusLabel.textContent = 'Ошибка связи';
       } else if (state === 'closed') {
         this.endCall(false);
       }
@@ -297,11 +375,19 @@ class CallManager {
       this.remoteAudio.srcObject = null;
     }
 
+    if (this.audioContext) {
+      try {
+        this.audioContext.close();
+      } catch (e) {}
+      this.audioContext = null;
+    }
+
     if (this.peerConnection) {
       this.peerConnection.close();
       this.peerConnection = null;
     }
 
+    this.iceCandidatesQueue = [];
     this.currentCallTarget = null;
     this.pendingOffer = null;
     this.callScreen.classList.add('hidden');
