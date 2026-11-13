@@ -4,3 +4,8 @@ android/app/build/
 android/build/
 .gradle/
 *.log
+logs/
+*.tmp
+.*.pid
+SERVER_URL.txt
+CURRENT_TUNNEL_URL.txt
