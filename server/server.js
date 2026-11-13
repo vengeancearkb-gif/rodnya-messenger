@@ -541,7 +541,22 @@ app.get('/api/profile/:username', (req, res) => {
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', time: new Date().toISOString(), usersCount: usersMap.size });
+  res.json({ status: 'ok', time: new Date().toISOString(), usersCount: usersMap.size, onlineCount: onlineUsers.size });
+});
+
+app.get('/api/debug/users', (req, res) => {
+  const list = [];
+  for (const [sId, u] of onlineUsers.entries()) {
+    list.push({
+      socketId: sId,
+      username: u.username,
+      displayName: u.displayName,
+      roomId: u.roomId,
+      inCall: u.inCall,
+      isNativeBackground: u.isNativeBackground || false
+    });
+  }
+  res.json({ count: list.length, users: list });
 });
 
 // SPA Fallback: serve index.html for all non-API GET requests
@@ -734,12 +749,14 @@ io.on('connection', (socket) => {
   socket.on('call-user', ({ targetUserId, targetUsername, offer }) => {
     if (!currentUser) return;
 
-    // Filter target sockets: MUST be in the same room!
+    // Filter target sockets: match by username OR display name in the same room!
     let targetSockets = [];
     if (targetUsername && targetUsername.trim() !== '') {
       const cleanTarget = targetUsername.trim().toLowerCase();
       for (const [sId, u] of onlineUsers.entries()) {
-        if (u.username.toLowerCase() === cleanTarget && sId !== socket.id && u.roomId === currentUser.roomId) {
+        const matchesUser = u.username.toLowerCase() === cleanTarget;
+        const matchesDisplay = u.displayName && u.displayName.trim().toLowerCase() === cleanTarget;
+        if ((matchesUser || matchesDisplay) && sId !== socket.id && u.roomId === currentUser.roomId) {
           targetSockets.push({ socketId: sId, user: u });
         }
       }
@@ -760,8 +777,8 @@ io.on('connection', (socket) => {
       return socket.emit('call-error', { message: 'Собеседник не найден или не в сети в этой комнате' });
     }
 
-    // Check if target is already in another call
-    const isTargetBusy = targetSockets.some(t => t.user.inCall);
+    // Only block if target is actively in an established call pair
+    const isTargetBusy = targetSockets.some(t => activeCallPairs.has(t.socketId));
     if (isTargetBusy) {
       return socket.emit('call-busy', { message: 'Собеседник сейчас разговаривает' });
     }

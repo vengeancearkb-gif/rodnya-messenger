@@ -104,6 +104,24 @@ public class MainActivity extends BridgeActivity {
         }
 
         @JavascriptInterface
+        public void setCallAudioMode(boolean inCall) {
+            runOnUiThread(() -> {
+                try {
+                    AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+                    if (am != null) {
+                        if (inCall) {
+                            am.setMode(AudioManager.MODE_IN_COMMUNICATION);
+                            am.setSpeakerphoneOn(true);
+                        } else {
+                            am.setMode(AudioManager.MODE_NORMAL);
+                            am.setSpeakerphoneOn(false);
+                        }
+                    }
+                } catch (Exception ignored) {}
+            });
+        }
+
+        @JavascriptInterface
         public String getPendingCallData() {
             String data = pendingCallDataString;
             pendingCallDataString = null;

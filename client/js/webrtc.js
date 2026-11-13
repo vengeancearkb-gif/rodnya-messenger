@@ -22,6 +22,8 @@ class CallManager {
     this.relayMicSource = null;
     this.relayProcessor = null;
     this.nextPlaybackTime = 0;
+    this.remoteAudioCtx = null;
+    this.remoteSourceNode = null;
 
     // High quality public STUN & TURN servers for international NAT traversal (including mobile 4G/5G)
     this.rtcConfig = {
@@ -93,17 +95,42 @@ class CallManager {
 
   // Ensure remote audio element is unmuted and playing
   unlockAndPlayAudio() {
-    if (!this.remoteAudio) return;
-    this.remoteAudio.muted = false;
-    this.remoteAudio.volume = 1.0;
-    const playPromise = this.remoteAudio.play();
-    if (playPromise !== undefined) {
-      playPromise.then(() => {
-        if (this.btnUnmuteCall) this.btnUnmuteCall.classList.add('hidden');
-      }).catch(err => {
-        console.warn('Audio play request:', err);
-        if (this.btnUnmuteCall) this.btnUnmuteCall.classList.remove('hidden');
-      });
+    if (window.AndroidApp && window.AndroidApp.setCallAudioMode) {
+      window.AndroidApp.setCallAudioMode(true);
+    }
+    if (this.remoteAudio) {
+      this.remoteAudio.muted = false;
+      this.remoteAudio.volume = 1.0;
+      const playPromise = this.remoteAudio.play();
+      if (playPromise !== undefined) {
+        playPromise.then(() => {
+          if (this.btnUnmuteCall) this.btnUnmuteCall.classList.add('hidden');
+        }).catch(err => {
+          console.warn('Audio play request:', err);
+          if (this.btnUnmuteCall) this.btnUnmuteCall.classList.remove('hidden');
+        });
+      }
+    }
+
+    // Direct Web Audio routing for guaranteed sound on Android WebView/mobile
+    if (this.remoteStream) {
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (AudioCtx) {
+          if (!this.remoteAudioCtx) {
+            this.remoteAudioCtx = new AudioCtx();
+          }
+          if (this.remoteAudioCtx.state === 'suspended') {
+            this.remoteAudioCtx.resume().catch(() => {});
+          }
+          if (!this.remoteSourceNode && this.remoteStream.getAudioTracks().length > 0) {
+            this.remoteSourceNode = this.remoteAudioCtx.createMediaStreamSource(this.remoteStream);
+            this.remoteSourceNode.connect(this.remoteAudioCtx.destination);
+          }
+        }
+      } catch (e) {
+        console.warn('Direct stream routing note:', e);
+      }
     }
   }
 
@@ -302,6 +329,9 @@ class CallManager {
     this.clearTimeouts();
     if (window.AndroidApp && window.AndroidApp.stopRinging) {
       window.AndroidApp.stopRinging();
+    }
+    if (window.AndroidApp && window.AndroidApp.setCallAudioMode) {
+      window.AndroidApp.setCallAudioMode(false);
     }
     window.soundManager.stopRingtone();
     this.incomingDialog.classList.add('hidden');
@@ -658,8 +688,20 @@ class CallManager {
     if (window.AndroidApp && window.AndroidApp.stopRinging) {
       window.AndroidApp.stopRinging();
     }
+    if (window.AndroidApp && window.AndroidApp.setCallAudioMode) {
+      window.AndroidApp.setCallAudioMode(false);
+    }
     window.soundManager.stopRingtone();
     window.soundManager.playEndCallSound();
+
+    if (this.remoteSourceNode) {
+      try { this.remoteSourceNode.disconnect(); } catch (e) {}
+      this.remoteSourceNode = null;
+    }
+    if (this.remoteAudioCtx) {
+      try { this.remoteAudioCtx.close(); } catch (e) {}
+      this.remoteAudioCtx = null;
+    }
 
     if (this.callTimerInterval) {
       clearInterval(this.callTimerInterval);
