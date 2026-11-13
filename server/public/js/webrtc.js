@@ -7,11 +7,14 @@ class CallManager {
     this.currentCallTarget = null;
     this.pendingOffer = null;
     this.iceCandidatesQueue = [];
+    this.localCandidates = [];
     this.callTimerInterval = null;
     this.outgoingRingingTimeout = null;
     this.incomingRingingTimeout = null;
     this.callSeconds = 0;
     this.isMuted = false;
+    this.isCaller = false;
+    this.iceRestartAttempted = false;
 
     // High quality public STUN & TURN servers for international NAT traversal (including mobile 4G/5G)
     this.rtcConfig = {
@@ -22,21 +25,16 @@ class CallManager {
         { urls: 'stun:stun3.l.google.com:19302' },
         { urls: 'stun:stun4.l.google.com:19302' },
         { urls: 'stun:stun.cloudflare.com:3478' },
-        { urls: 'stun:openrelay.metered.ca:80' },
+        { urls: 'stun:stun.relay.metered.ca:80' },
         {
-          urls: 'turn:openrelay.metered.ca:80',
-          username: 'openrelay',
-          credential: 'openrelay'
+          urls: 'turn:turn.evan-brass.net:3478',
+          username: 'user',
+          credential: 'password'
         },
         {
-          urls: 'turn:openrelay.metered.ca:443',
-          username: 'openrelay',
-          credential: 'openrelay'
-        },
-        {
-          urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-          username: 'openrelay',
-          credential: 'openrelay'
+          urls: 'turn:turn.evan-brass.net:3478?transport=tcp',
+          username: 'user',
+          credential: 'password'
         }
       ],
       iceCandidatePoolSize: 10
@@ -130,6 +128,9 @@ class CallManager {
       username: finalUsername
     };
     this.iceCandidatesQueue = [];
+    this.localCandidates = [];
+    this.isCaller = true;
+    this.iceRestartAttempted = false;
     this.clearTimeouts();
 
     // Pre-unlock audio element in user gesture context
@@ -243,6 +244,9 @@ class CallManager {
       avatar: fromAvatar
     };
     this.pendingOffer = null;
+    this.isCaller = false;
+    this.iceRestartAttempted = false;
+    this.localCandidates = [];
 
     try {
       this.localStream = await this.acquireMicrophone();
@@ -266,11 +270,12 @@ class CallManager {
 
     try {
       await this.peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
-      // Drain any ICE candidates received while incoming call dialog was showing!
-      await this.drainIceCandidates();
 
       const answer = await this.peerConnection.createAnswer();
       await this.peerConnection.setLocalDescription(answer);
+
+      // Drain queued ICE candidates strictly AFTER local description answer is set!
+      await this.drainIceCandidates();
 
       if (window.messengerApp && window.messengerApp.socket) {
         window.messengerApp.socket.emit('call-answer', {
@@ -278,7 +283,6 @@ class CallManager {
           answer
         });
       }
-      // Note: Timer will start automatically when peerConnection connects!
     } catch (err) {
       console.error('Error answering call:', err);
       this.endCall(true);
@@ -304,6 +308,7 @@ class CallManager {
       this.pendingOffer = null;
     }
     this.iceCandidatesQueue = [];
+    this.localCandidates = [];
   }
 
   // Remote party answered our call
@@ -316,7 +321,17 @@ class CallManager {
     try {
       await this.peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
       await this.drainIceCandidates();
-      // Note: Timer will start automatically when peerConnection connects!
+
+      // RE-EMIT ALL GATHERED LOCAL CANDIDATES DIRECTLY TO CONFIRMED CALLEE SOCKET!
+      if (this.localCandidates && this.localCandidates.length > 0) {
+        for (const cand of this.localCandidates) {
+          window.messengerApp.socket.emit('ice-candidate', {
+            targetUserId: fromUserId,
+            targetUsername: this.currentCallTarget ? this.currentCallTarget.username : '',
+            candidate: cand
+          });
+        }
+      }
     } catch (err) {
       console.error('Error setting remote answer:', err);
     }
@@ -364,10 +379,12 @@ class CallManager {
     this.peerConnection = new RTCPeerConnection(this.rtcConfig);
 
     this.peerConnection.onicecandidate = (event) => {
-      if (event.candidate && this.currentCallTarget) {
-        if (window.messengerApp && window.messengerApp.socket) {
+      if (event.candidate) {
+        this.localCandidates.push(event.candidate);
+        if (this.currentCallTarget && window.messengerApp && window.messengerApp.socket) {
           window.messengerApp.socket.emit('ice-candidate', {
             targetUserId: this.currentCallTarget.id,
+            targetUsername: this.currentCallTarget.username || '',
             candidate: event.candidate
           });
         }
@@ -408,11 +425,17 @@ class CallManager {
         this.clearTimeouts();
         this.callStatusLabel.textContent = 'Идёт разговор';
         this.unlockAndPlayAudio();
-        this.startCallTimer(); // Start timer strictly on connection established!
+        this.startCallTimer();
       } else if (iceState === 'checking') {
         this.callStatusLabel.textContent = 'Установка защищённого соединения...';
       } else if (state === 'failed' || iceState === 'failed') {
-        this.callStatusLabel.textContent = 'Ошибка P2P соединения';
+        if (this.peerConnection && this.isCaller && !this.iceRestartAttempted) {
+          this.iceRestartAttempted = true;
+          this.callStatusLabel.textContent = 'Переподключение связи...';
+          this.restartIce();
+        } else {
+          this.callStatusLabel.textContent = 'Ошибка P2P соединения';
+        }
       } else if (state === 'disconnected' || iceState === 'disconnected') {
         this.callStatusLabel.textContent = 'Переподключение связи...';
       } else if (state === 'closed') {
@@ -422,6 +445,23 @@ class CallManager {
 
     this.peerConnection.onconnectionstatechange = updateConnectionStatus;
     this.peerConnection.oniceconnectionstatechange = updateConnectionStatus;
+  }
+
+  async restartIce() {
+    if (!this.peerConnection || !this.currentCallTarget) return;
+    try {
+      const offer = await this.peerConnection.createOffer({ iceRestart: true });
+      await this.peerConnection.setLocalDescription(offer);
+      if (window.messengerApp && window.messengerApp.socket) {
+        window.messengerApp.socket.emit('call-user', {
+          targetUserId: this.currentCallTarget.id,
+          targetUsername: this.currentCallTarget.username,
+          offer
+        });
+      }
+    } catch (e) {
+      console.warn('ICE restart error:', e);
+    }
   }
 
   // Toggle local microphone mute
@@ -513,8 +553,11 @@ class CallManager {
     }
 
     this.iceCandidatesQueue = [];
+    this.localCandidates = [];
     this.currentCallTarget = null;
     this.pendingOffer = null;
+    this.isCaller = false;
+    this.iceRestartAttempted = false;
     if (this.btnUnmuteCall) this.btnUnmuteCall.classList.add('hidden');
     this.callScreen.classList.add('hidden');
     this.incomingDialog.classList.add('hidden');

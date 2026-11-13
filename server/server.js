@@ -577,6 +577,9 @@ const onlineUsers = new Map();
 // Active call pairs: socket.id -> { peerSocketId, roomId }
 const activeCallPairs = new Map();
 
+// Pending ICE candidates buffer for ringing calls: callerSocketId -> Array<candidate>
+const pendingCallCandidates = new Map();
+
 function getRoomHistory(roomId) {
   if (!roomHistory.has(roomId)) {
     roomHistory.set(roomId, []);
@@ -764,6 +767,7 @@ io.on('connection', (socket) => {
     }
 
     currentUser.inCall = true;
+    pendingCallCandidates.set(socket.id, []);
     for (const t of targetSockets) {
       t.user.inCall = true;
     }
@@ -795,9 +799,24 @@ io.on('connection', (socket) => {
       fromUserId: socket.id,
       answer
     });
+
+    // Flush any buffered caller candidates directly to this answering callee!
+    if (pendingCallCandidates.has(targetUserId)) {
+      const candidates = pendingCallCandidates.get(targetUserId);
+      for (const cand of candidates) {
+        io.to(socket.id).emit('ice-candidate', {
+          fromUserId: targetUserId,
+          candidate: cand
+        });
+      }
+      pendingCallCandidates.delete(targetUserId);
+    }
   });
 
   socket.on('call-reject', ({ targetUserId, reason }) => {
+    pendingCallCandidates.delete(socket.id);
+    if (targetUserId) pendingCallCandidates.delete(targetUserId);
+
     if (currentUser) {
       currentUser.inCall = false;
       for (const [sId, u] of onlineUsers.entries()) {
@@ -834,6 +853,9 @@ io.on('connection', (socket) => {
   });
 
   socket.on('call-end', ({ targetUserId, targetUsername }) => {
+    pendingCallCandidates.delete(socket.id);
+    if (targetUserId) pendingCallCandidates.delete(targetUserId);
+
     if (currentUser) {
       currentUser.inCall = false;
       for (const [sId, u] of onlineUsers.entries()) {
@@ -882,14 +904,47 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('ice-candidate', ({ targetUserId, candidate }) => {
-    io.to(targetUserId).emit('ice-candidate', {
-      fromUserId: socket.id,
-      candidate
-    });
+  socket.on('ice-candidate', ({ targetUserId, targetUsername, candidate }) => {
+    if (!candidate || !currentUser) return;
+
+    // 1. If actively in a call pair, route directly to the active peer socket!
+    if (activeCallPairs.has(socket.id)) {
+      const pair = activeCallPairs.get(socket.id);
+      return io.to(pair.peerSocketId).emit('ice-candidate', {
+        fromUserId: socket.id,
+        candidate
+      });
+    }
+
+    // 2. If caller is gathering candidates before answer, buffer them!
+    if (pendingCallCandidates.has(socket.id)) {
+      pendingCallCandidates.get(socket.id).push(candidate);
+    }
+
+    // 3. Forward to target user sockets
+    let targetSockets = [];
+    if (targetUsername) {
+      const cleanTarget = targetUsername.trim().toLowerCase();
+      for (const [sId, u] of onlineUsers.entries()) {
+        if (u.username.toLowerCase() === cleanTarget && sId !== socket.id) {
+          targetSockets.push(sId);
+        }
+      }
+    }
+    if (targetSockets.length === 0 && targetUserId) {
+      targetSockets.push(targetUserId);
+    }
+
+    for (const tId of targetSockets) {
+      io.to(tId).emit('ice-candidate', {
+        fromUserId: socket.id,
+        candidate
+      });
+    }
   });
 
   socket.on('disconnect', () => {
+    pendingCallCandidates.delete(socket.id);
     // If user was in an active call, notify the other peer immediately!
     if (activeCallPairs.has(socket.id)) {
       const pair = activeCallPairs.get(socket.id);
