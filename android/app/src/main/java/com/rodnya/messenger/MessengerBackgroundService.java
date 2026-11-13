@@ -172,9 +172,6 @@ public class MessengerBackgroundService extends Service {
                     joinData.put("token", token);
                     joinData.put("username", username);
                     joinData.put("displayName", displayName);
-                    joinData.put("avatar", avatar);
-                    joinData.put("bio", bio);
-                    joinData.put("password", password);
                     joinData.put("roomId", roomId);
                     joinData.put("isNativeBackground", true);
                     socket.emit("join-room", joinData);
@@ -183,15 +180,24 @@ public class MessengerBackgroundService extends Service {
 
             // Handle incoming calls while app is closed or in background
             socket.on("call-incoming", args -> {
-                if (args.length > 0 && args[0] instanceof JSONObject) {
-                    JSONObject data = (JSONObject) args[0];
-                    String fromUserId = data.optString("fromUserId");
-                    String fromUsername = data.optString("fromUsername", "Родственник");
+                if (args.length > 0) {
+                    JSONObject data = null;
+                    if (args[0] instanceof JSONObject) {
+                        data = (JSONObject) args[0];
+                    } else if (args[0] instanceof String) {
+                        try {
+                            data = new JSONObject((String) args[0]);
+                        } catch (Exception ignored) {}
+                    }
+                    if (data != null) {
+                        String fromUserId = data.optString("fromUserId");
+                        String fromUsername = data.optString("fromUsername", "Родственник");
 
-                    pendingCallData = data;
+                        pendingCallData = data;
 
-                    if (!MainActivity.isAppInForeground) {
-                        showIncomingCallNotification(fromUserId, fromUsername, data);
+                        if (!MainActivity.isAppInForeground) {
+                            showIncomingCallNotification(fromUserId, fromUsername, data);
+                        }
                     }
                 }
             });
@@ -250,6 +256,18 @@ public class MessengerBackgroundService extends Service {
             if (currentRingtone == null) {
                 Uri ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
                 currentRingtone = RingtoneManager.getRingtone(getApplicationContext(), ringtoneUri);
+                if (currentRingtone != null) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        currentRingtone.setLooping(true);
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                        AudioAttributes aa = new AudioAttributes.Builder()
+                                .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                                .build();
+                        currentRingtone.setAudioAttributes(aa);
+                    }
+                }
             }
             if (currentRingtone != null && !currentRingtone.isPlaying()) {
                 currentRingtone.play();
@@ -374,6 +392,20 @@ public class MessengerBackgroundService extends Service {
                 } catch (Exception ignored) {}
             }
         }
+    }
+
+    @Override
+    public void onTaskRemoved(Intent rootIntent) {
+        super.onTaskRemoved(rootIntent);
+        try {
+            Intent restartServiceIntent = new Intent(getApplicationContext(), MessengerBackgroundService.class);
+            restartServiceIntent.setPackage(getPackageName());
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                androidx.core.content.ContextCompat.startForegroundService(getApplicationContext(), restartServiceIntent);
+            } else {
+                startService(restartServiceIntent);
+            }
+        } catch (Exception ignored) {}
     }
 
     @Override

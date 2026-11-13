@@ -589,13 +589,16 @@ io.on('connection', (socket) => {
 
     // Find all sockets for target user
     let targetSockets = [];
-    if (targetUsername) {
+    if (targetUsername && targetUsername.trim() !== '') {
+      const cleanTarget = targetUsername.trim().toLowerCase();
       for (const [sId, u] of onlineUsers.entries()) {
-        if (u.username.toLowerCase() === targetUsername.toLowerCase() && sId !== socket.id) {
+        if (u.username.toLowerCase() === cleanTarget && sId !== socket.id) {
           targetSockets.push({ socketId: sId, user: u });
         }
       }
-    } else if (targetUserId) {
+    }
+
+    if (targetSockets.length === 0 && targetUserId) {
       const directTarget = onlineUsers.get(targetUserId);
       if (directTarget) {
         for (const [sId, u] of onlineUsers.entries()) {
@@ -608,11 +611,6 @@ io.on('connection', (socket) => {
 
     if (targetSockets.length === 0) {
       return socket.emit('call-error', { message: 'Собеседник не в сети' });
-    }
-
-    const isAnyInCall = targetSockets.some(t => t.user.inCall);
-    if (isAnyInCall) {
-      return socket.emit('call-busy', { targetUserId, message: 'Собеседник занят другим звонком' });
     }
 
     currentUser.inCall = true;
@@ -675,7 +673,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('call-end', ({ targetUserId }) => {
+  socket.on('call-end', ({ targetUserId, targetUsername }) => {
     if (currentUser) {
       currentUser.inCall = false;
       for (const [sId, u] of onlineUsers.entries()) {
@@ -686,17 +684,35 @@ io.on('connection', (socket) => {
       io.to(currentUser.roomId).emit('users-update', getRoomUsers(currentUser.roomId));
     }
 
-    const directTarget = onlineUsers.get(targetUserId);
-    if (directTarget) {
+    let targetSockets = [];
+    if (targetUsername && targetUsername.trim() !== '') {
+      const cleanTarget = targetUsername.trim().toLowerCase();
       for (const [sId, u] of onlineUsers.entries()) {
-        if (u.username.toLowerCase() === directTarget.username.toLowerCase()) {
-          u.inCall = false;
-          io.to(sId).emit('call-ended', { fromUserId: socket.id });
+        if (u.username.toLowerCase() === cleanTarget) {
+          targetSockets.push({ socketId: sId, user: u });
         }
       }
-      io.to(directTarget.roomId).emit('users-update', getRoomUsers(directTarget.roomId));
-    } else if (targetUserId) {
-      io.to(targetUserId).emit('call-ended', { fromUserId: socket.id });
+    }
+
+    if (targetSockets.length === 0 && targetUserId) {
+      const directTarget = onlineUsers.get(targetUserId);
+      if (directTarget) {
+        for (const [sId, u] of onlineUsers.entries()) {
+          if (u.username.toLowerCase() === directTarget.username.toLowerCase()) {
+            targetSockets.push({ socketId: sId, user: u });
+          }
+        }
+      } else {
+        io.to(targetUserId).emit('call-ended', { fromUserId: socket.id });
+      }
+    }
+
+    for (const t of targetSockets) {
+      t.user.inCall = false;
+      io.to(t.socketId).emit('call-ended', { fromUserId: socket.id });
+    }
+    if (targetSockets.length > 0) {
+      io.to(targetSockets[0].user.roomId).emit('users-update', getRoomUsers(targetSockets[0].user.roomId));
     }
   });
 

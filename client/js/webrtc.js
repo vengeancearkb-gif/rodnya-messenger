@@ -107,9 +107,15 @@ class CallManager {
   }
 
   // Start outgoing audio call to a user
-  async startCall(targetUserId, targetUsername) {
+  async startCall(targetUserId, targetDisplayName, targetUsername) {
     if (this.peerConnection) return;
-    this.currentCallTarget = { id: targetUserId, name: targetUsername };
+    const finalUsername = targetUsername || targetDisplayName || '';
+    const finalDisplayName = targetDisplayName || targetUsername || 'Родственник';
+    this.currentCallTarget = {
+      id: targetUserId,
+      name: finalDisplayName,
+      username: finalUsername
+    };
     this.iceCandidatesQueue = [];
 
     // Pre-unlock audio element in user gesture context
@@ -122,7 +128,7 @@ class CallManager {
       return;
     }
 
-    this.showCallScreen(targetUsername, 'Вызов...');
+    this.showCallScreen(finalDisplayName, 'Вызов...');
     this.createPeerConnection();
 
     // Add local audio tracks to peer connection
@@ -140,6 +146,7 @@ class CallManager {
 
       window.messengerApp.socket.emit('call-user', {
         targetUserId,
+        targetUsername: finalUsername,
         offer
       });
     } catch (err) {
@@ -427,7 +434,8 @@ class CallManager {
 
     if (notifyPeer && this.currentCallTarget) {
       window.messengerApp.socket.emit('call-end', {
-        targetUserId: this.currentCallTarget.id
+        targetUserId: this.currentCallTarget.id,
+        targetUsername: this.currentCallTarget.username || ''
       });
     }
 
