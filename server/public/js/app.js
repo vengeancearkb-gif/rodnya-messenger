@@ -1,12 +1,17 @@
-// Core Messenger Application Logic
+// Core Messenger Application with User Profiles & Authentication
 class MessengerApp {
   constructor() {
     this.socket = null;
-    this.username = localStorage.getItem('family_username') || '';
+    this.token = localStorage.getItem('family_token') || null;
+    this.user = JSON.parse(localStorage.getItem('family_user') || 'null');
     this.roomId = localStorage.getItem('family_room') || 'semya';
     this.serverUrl = localStorage.getItem('family_server_url') || 'https://rodnya-messenger.onrender.com';
     this.onlineMembers = [];
     this.pingInterval = null;
+
+    // Temporary avatar upload state
+    this.regAvatarUrl = null;
+    this.editAvatarUrl = null;
 
     this.initDOM();
     this.checkAutoLogin();
@@ -16,12 +21,34 @@ class MessengerApp {
     // Screens
     this.loginScreen = document.getElementById('login-screen');
     this.appScreen = document.getElementById('app-screen');
+
+    // Auth Tabs
+    this.tabLoginBtn = document.getElementById('tab-login-btn');
+    this.tabRegisterBtn = document.getElementById('tab-register-btn');
+    this.authAlert = document.getElementById('auth-alert');
+
+    // Forms
     this.loginForm = document.getElementById('login-form');
-    this.usernameInput = document.getElementById('username-input');
-    this.roomInput = document.getElementById('room-input');
-    this.serverInput = document.getElementById('server-input');
+    this.loginUsername = document.getElementById('login-username');
+    this.loginPassword = document.getElementById('login-password');
+    this.loginRoom = document.getElementById('login-room');
+    this.loginServerUrl = document.getElementById('login-server-url');
+
+    this.registerForm = document.getElementById('register-form');
+    this.regDisplayName = document.getElementById('reg-displayname');
+    this.regUsername = document.getElementById('reg-username');
+    this.regPassword = document.getElementById('reg-password');
+    this.regBio = document.getElementById('reg-bio');
+    this.regRoom = document.getElementById('reg-room');
+    this.regServerUrl = document.getElementById('reg-server-url');
+    this.regAvatarPreview = document.getElementById('reg-avatar-preview');
+    this.regAvatarLetter = document.getElementById('reg-avatar-letter');
+    this.regAvatarBtn = document.getElementById('reg-avatar-btn');
+    this.regAvatarInput = document.getElementById('reg-avatar-input');
 
     // Header & Info
+    this.btnMyProfile = document.getElementById('btn-my-profile');
+    this.headerAvatarLetter = document.getElementById('header-avatar-letter');
     this.roomTitle = document.getElementById('room-title');
     this.connectionStatus = document.getElementById('connection-status');
     this.pingBadge = document.getElementById('ping-badge');
@@ -43,27 +70,72 @@ class MessengerApp {
     this.fileInput = document.getElementById('file-input');
     this.typingIndicator = document.getElementById('typing-indicator');
 
-    // Modals
+    // Modals: My Profile
+    this.myProfileModal = document.getElementById('my-profile-modal');
+    this.myProfileBackdrop = document.getElementById('my-profile-backdrop');
+    this.myProfileClose = document.getElementById('my-profile-close');
+    this.myProfileUsernameTag = document.getElementById('my-profile-username-tag');
+    this.editDisplayName = document.getElementById('edit-displayname');
+    this.editBio = document.getElementById('edit-bio');
+    this.editAvatarPreview = document.getElementById('edit-avatar-preview');
+    this.editAvatarLetter = document.getElementById('edit-avatar-letter');
+    this.editAvatarBtn = document.getElementById('edit-avatar-btn');
+    this.editAvatarInput = document.getElementById('edit-avatar-input');
+    this.btnSaveProfile = document.getElementById('btn-save-profile');
+    this.btnLogout = document.getElementById('btn-logout');
+
+    // Modals: View Other User Profile
+    this.userProfileModal = document.getElementById('user-profile-modal');
+    this.userProfileBackdrop = document.getElementById('user-profile-backdrop');
+    this.userProfileClose = document.getElementById('user-profile-close');
+    this.viewProfileAvatarBox = document.getElementById('view-profile-avatar-box');
+    this.viewProfileLetter = document.getElementById('view-profile-letter');
+    this.viewProfileName = document.getElementById('view-profile-name');
+    this.viewProfileUsername = document.getElementById('view-profile-username');
+    this.viewProfileOnline = document.getElementById('view-profile-online');
+    this.viewProfileBio = document.getElementById('view-profile-bio');
+    this.btnProfileCall = document.getElementById('btn-profile-call');
+    this.btnProfileMessage = document.getElementById('btn-profile-message');
+
+    // Modals: Settings & Image
+    this.settingsModal = document.getElementById('settings-modal');
+    this.settingsServerUrl = document.getElementById('settings-server-url');
+    this.settingsRoom = document.getElementById('settings-room');
+    this.btnSaveSettings = document.getElementById('btn-save-settings');
+    this.settingsClose = document.getElementById('settings-close');
+    this.settingsBackdrop = document.getElementById('settings-backdrop');
+
     this.imageModal = document.getElementById('image-modal');
     this.modalImage = document.getElementById('modal-image');
     this.modalDownload = document.getElementById('modal-download');
     this.modalClose = document.getElementById('modal-close');
     this.modalBackdrop = document.getElementById('modal-backdrop');
 
-    this.settingsModal = document.getElementById('settings-modal');
-    this.settingsServerUrl = document.getElementById('settings-server-url');
-    this.settingsUsername = document.getElementById('settings-username');
-    this.settingsRoom = document.getElementById('settings-room');
-    this.btnSaveSettings = document.getElementById('btn-save-settings');
-    this.btnLogout = document.getElementById('btn-logout');
-    this.settingsClose = document.getElementById('settings-close');
-    this.settingsBackdrop = document.getElementById('settings-backdrop');
+    this.bindEvents();
+  }
 
-    // Bind event listeners
+  bindEvents() {
+    // Auth Tabs
+    this.tabLoginBtn.addEventListener('click', () => this.switchAuthTab('login'));
+    this.tabRegisterBtn.addEventListener('click', () => this.switchAuthTab('register'));
+
+    // Forms
     this.loginForm.addEventListener('submit', (e) => this.handleLogin(e));
-    this.btnSend.addEventListener('click', () => this.sendMessage());
+    this.registerForm.addEventListener('submit', (e) => this.handleRegister(e));
 
-    // Enter to send (Shift+Enter for newline)
+    // Avatar pickers
+    const triggerRegAvatar = () => this.regAvatarInput.click();
+    this.regAvatarBtn.addEventListener('click', triggerRegAvatar);
+    this.regAvatarPreview.addEventListener('click', triggerRegAvatar);
+    this.regAvatarInput.addEventListener('change', (e) => this.uploadAvatar(e, 'reg'));
+
+    const triggerEditAvatar = () => this.editAvatarInput.click();
+    this.editAvatarBtn.addEventListener('click', triggerEditAvatar);
+    this.editAvatarPreview.addEventListener('click', triggerEditAvatar);
+    this.editAvatarInput.addEventListener('change', (e) => this.uploadAvatar(e, 'edit'));
+
+    // Messages
+    this.btnSend.addEventListener('click', () => this.sendMessage());
     this.messageInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -71,7 +143,6 @@ class MessengerApp {
       }
     });
 
-    // Auto-grow textarea
     this.messageInput.addEventListener('input', () => {
       this.messageInput.style.height = 'auto';
       this.messageInput.style.height = Math.min(this.messageInput.scrollHeight, 120) + 'px';
@@ -87,61 +158,232 @@ class MessengerApp {
     this.btnAttach.addEventListener('click', () => this.fileInput.click());
     this.fileInput.addEventListener('change', (e) => this.handleFileUpload(e));
 
-    // Quick call (call first available member)
+    // Quick call
     this.btnQuickCall.addEventListener('click', () => this.handleQuickCall());
 
-    // Modals
-    this.modalClose.addEventListener('click', () => this.closeImageModal());
-    this.modalBackdrop.addEventListener('click', () => this.closeImageModal());
+    // Profile modals
+    this.btnMyProfile.addEventListener('click', () => this.openMyProfile());
+    this.myProfileClose.addEventListener('click', () => this.closeMyProfile());
+    this.myProfileBackdrop.addEventListener('click', () => this.closeMyProfile());
+    this.btnSaveProfile.addEventListener('click', () => this.saveMyProfile());
+    this.btnLogout.addEventListener('click', () => this.logout());
 
+    this.userProfileClose.addEventListener('click', () => this.closeUserProfile());
+    this.userProfileBackdrop.addEventListener('click', () => this.closeUserProfile());
+
+    // Settings modal
     this.btnSettings.addEventListener('click', () => this.openSettings());
     this.settingsClose.addEventListener('click', () => this.closeSettings());
     this.settingsBackdrop.addEventListener('click', () => this.closeSettings());
     this.btnSaveSettings.addEventListener('click', () => this.saveSettings());
-    this.btnLogout.addEventListener('click', () => this.logout());
+
+    // Image modal
+    this.modalClose.addEventListener('click', () => this.closeImageModal());
+    this.modalBackdrop.addEventListener('click', () => this.closeImageModal());
   }
 
-  checkAutoLogin() {
-    if (this.username && this.roomId) {
-      this.usernameInput.value = this.username;
-      this.roomInput.value = this.roomId;
-      this.serverInput.value = this.serverUrl;
-      this.connect();
+  switchAuthTab(tab) {
+    this.hideAlert();
+    if (tab === 'login') {
+      this.tabLoginBtn.classList.add('active');
+      this.tabRegisterBtn.classList.remove('active');
+      this.loginForm.classList.remove('hidden');
+      this.registerForm.classList.add('hidden');
     } else {
-      this.serverInput.value = this.serverUrl || 'https://rodnya-messenger.onrender.com';
+      this.tabRegisterBtn.classList.add('active');
+      this.tabLoginBtn.classList.remove('active');
+      this.registerForm.classList.remove('hidden');
+      this.loginForm.classList.add('hidden');
     }
   }
 
-  handleLogin(e) {
+  showAlert(msg, isError = true) {
+    this.authAlert.className = `alert-box visible ${isError ? 'alert-error' : 'alert-success'}`;
+    this.authAlert.textContent = msg;
+  }
+
+  hideAlert() {
+    this.authAlert.className = 'alert-box';
+    this.authAlert.textContent = '';
+  }
+
+  // Auto Login Check
+  async checkAutoLogin() {
+    if (this.token && this.user) {
+      try {
+        const res = await fetch(`${this.serverUrl}/api/auth/me`, {
+          headers: { 'Authorization': `Bearer ${this.token}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          this.user = data.user;
+          localStorage.setItem('family_user', JSON.stringify(this.user));
+          this.enterMessenger();
+          return;
+        }
+      } catch (e) {
+        console.warn('Auto-login verification failed:', e);
+      }
+    }
+
+    // Default values in inputs
+    this.loginServerUrl.value = this.serverUrl;
+    this.regServerUrl.value = this.serverUrl;
+    this.loginRoom.value = this.roomId;
+    this.regRoom.value = this.roomId;
+  }
+
+  // Handle Registration
+  async handleRegister(e) {
     e.preventDefault();
-    this.username = this.usernameInput.value.trim();
-    this.roomId = this.roomInput.value.trim().toLowerCase();
-    this.serverUrl = this.serverInput.value.trim();
+    this.hideAlert();
 
-    if (!this.username) return;
+    const displayName = this.regDisplayName.value.trim();
+    const username = this.regUsername.value.trim().toLowerCase();
+    const password = this.regPassword.value;
+    const bio = this.regBio.value.trim();
+    this.roomId = this.regRoom.value.trim().toLowerCase() || 'semya';
+    this.serverUrl = this.regServerUrl.value.trim() || 'https://rodnya-messenger.onrender.com';
 
-    localStorage.setItem('family_username', this.username);
-    localStorage.setItem('family_room', this.roomId);
-    localStorage.setItem('family_server_url', this.serverUrl);
+    if (!displayName || !username || !password) {
+      this.showAlert('Заполните все обязательные поля');
+      return;
+    }
 
+    try {
+      const res = await fetch(`${this.serverUrl}/api/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          displayName,
+          username,
+          password,
+          avatar: this.regAvatarUrl,
+          bio
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Ошибка при создании профиля');
+      }
+
+      this.token = data.token;
+      this.user = data.user;
+
+      localStorage.setItem('family_token', this.token);
+      localStorage.setItem('family_user', JSON.stringify(this.user));
+      localStorage.setItem('family_room', this.roomId);
+      localStorage.setItem('family_server_url', this.serverUrl);
+
+      this.enterMessenger();
+    } catch (err) {
+      this.showAlert(err.message);
+    }
+  }
+
+  // Handle Login
+  async handleLogin(e) {
+    e.preventDefault();
+    this.hideAlert();
+
+    const username = this.loginUsername.value.trim().toLowerCase();
+    const password = this.loginPassword.value;
+    this.roomId = this.loginRoom.value.trim().toLowerCase() || 'semya';
+    this.serverUrl = this.loginServerUrl.value.trim() || 'https://rodnya-messenger.onrender.com';
+
+    if (!username || !password) {
+      this.showAlert('Введите логин и пароль');
+      return;
+    }
+
+    try {
+      const res = await fetch(`${this.serverUrl}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Ошибка входа');
+      }
+
+      this.token = data.token;
+      this.user = data.user;
+
+      localStorage.setItem('family_token', this.token);
+      localStorage.setItem('family_user', JSON.stringify(this.user));
+      localStorage.setItem('family_room', this.roomId);
+      localStorage.setItem('family_server_url', this.serverUrl);
+
+      this.enterMessenger();
+    } catch (err) {
+      this.showAlert(err.message);
+    }
+  }
+
+  // Avatar Upload Helper
+  async uploadAvatar(e, type) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const res = await fetch(`${this.serverUrl}/api/upload`, {
+        method: 'POST',
+        body: formData
+      });
+      if (!res.ok) throw new Error('Ошибка загрузки фото');
+      const data = await res.json();
+
+      const fullUrl = this.getFullMediaUrl(data.url);
+
+      if (type === 'reg') {
+        this.regAvatarUrl = data.url;
+        this.regAvatarPreview.innerHTML = `<img src="${fullUrl}" alt="Аватар">`;
+      } else {
+        this.editAvatarUrl = data.url;
+        this.editAvatarPreview.innerHTML = `<img src="${fullUrl}" alt="Аватар">`;
+      }
+    } catch (err) {
+      alert('Не удалось загрузить фото: ' + err.message);
+    }
+  }
+
+  enterMessenger() {
+    this.loginScreen.classList.remove('active');
+    this.appScreen.classList.add('active');
+
+    this.roomTitle.textContent = `Комната: ${this.roomId.toUpperCase()}`;
+    this.updateHeaderAvatar();
     this.connect();
   }
 
-  connect() {
-    this.loginScreen.classList.remove('active');
-    this.appScreen.classList.add('active');
-    this.roomTitle.textContent = `Комната: ${this.roomId.toUpperCase()}`;
+  updateHeaderAvatar() {
+    if (!this.user) return;
+    if (this.user.avatar) {
+      const url = this.getFullMediaUrl(this.user.avatar);
+      this.btnMyProfile.innerHTML = `<img src="${url}" alt="Аватар">`;
+    } else {
+      const letter = (this.user.displayName || this.user.username || 'Я').charAt(0).toUpperCase();
+      this.btnMyProfile.innerHTML = letter;
+    }
+  }
 
+  connect() {
     let socketEndpoint = this.serverUrl;
     if (!socketEndpoint || socketEndpoint.trim() === '') {
-      socketEndpoint = window.location.origin.includes('http') ? window.location.origin : 'http://localhost:3000';
+      socketEndpoint = window.location.origin.includes('http') ? window.location.origin : 'https://rodnya-messenger.onrender.com';
     }
 
     if (this.socket) {
       this.socket.disconnect();
     }
 
-    console.log('Connecting to server:', socketEndpoint);
+    console.log('Connecting socket to:', socketEndpoint);
     this.updateStatus('connecting', 'Подключение...');
 
     this.socket = io(socketEndpoint, {
@@ -161,7 +403,11 @@ class MessengerApp {
     this.socket.on('connect', () => {
       this.updateStatus('online', 'В сети');
       this.socket.emit('join-room', {
-        username: this.username,
+        token: this.token,
+        username: this.user ? this.user.username : 'Гость',
+        displayName: this.user ? this.user.displayName : 'Гость',
+        avatar: this.user ? this.user.avatar : null,
+        bio: this.user ? this.user.bio : '',
         roomId: this.roomId
       });
     });
@@ -193,7 +439,7 @@ class MessengerApp {
       welcome.className = 'system-welcome';
       welcome.innerHTML = `
         <div class="welcome-badge">🔒 Семейная комната: ${this.roomId}</div>
-        <p>Связь защищена прямым шифрованием. Все сообщения доставляются мгновенно.</p>
+        <p>Сообщения и звонки защищены прямым сквозным каналом.</p>
       `;
       this.chatMessages.appendChild(welcome);
 
@@ -202,7 +448,7 @@ class MessengerApp {
     });
 
     this.socket.on('new-message', (message) => {
-      const isMine = message.senderName === this.username;
+      const isMine = this.user && (message.senderUsername === this.user.username || message.senderName === this.user.displayName);
       this.renderMessage(message, true);
       this.scrollToBottom();
 
@@ -286,9 +532,8 @@ class MessengerApp {
     formData.append('file', file);
 
     try {
-      this.renderSystemNotice(`Загрузка файла ${file.name}...`);
-      const serverUrl = this.serverUrl || '';
-      const res = await fetch(`${serverUrl}/api/upload`, {
+      this.renderSystemNotice(`Загрузка ${file.name}...`);
+      const res = await fetch(`${this.serverUrl}/api/upload`, {
         method: 'POST',
         body: formData
       });
@@ -303,34 +548,44 @@ class MessengerApp {
         fileSize: this.formatBytes(file.size)
       });
     } catch (err) {
-      alert('Ошибка при отправке файла: ' + err.message);
+      alert('Ошибка при отправке: ' + err.message);
     } finally {
       this.fileInput.value = '';
     }
   }
 
-  renderMessage(msg, animate = true) {
-    const isMine = msg.senderName === this.username;
+  renderMessage(msg) {
+    const isMine = this.user && (msg.senderUsername === this.user.username || msg.senderName === this.user.displayName);
+    const row = document.createElement('div');
+    row.className = `message-row ${isMine ? 'outgoing' : 'incoming'}`;
+
+    // Sender Avatar circle
+    let avatarHtml = '';
+    if (!isMine) {
+      const avatarSrc = msg.senderAvatar ? this.getFullMediaUrl(msg.senderAvatar) : null;
+      const initial = (msg.senderName || 'Р').charAt(0).toUpperCase();
+      avatarHtml = `
+        <div class="message-avatar-circle" onclick="window.messengerApp.viewUserProfile('${this.escapeHtml(msg.senderUsername || '')}')" title="${this.escapeHtml(msg.senderName)}">
+          ${avatarSrc ? `<img src="${avatarSrc}" alt="Avatar">` : initial}
+        </div>
+      `;
+    }
+
     const bubble = document.createElement('div');
     bubble.className = `message-bubble ${isMine ? 'message-outgoing' : 'message-incoming'}`;
 
     let contentHtml = '';
-
-    // Sender name for incoming
     if (!isMine) {
-      contentHtml += `<div class="message-sender">${this.escapeHtml(msg.senderName)}</div>`;
+      contentHtml += `<div class="message-sender" onclick="window.messengerApp.viewUserProfile('${this.escapeHtml(msg.senderUsername || '')}')">${this.escapeHtml(msg.senderName)}</div>`;
     }
 
     const timeStr = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-    // Render by type
     if (msg.type === 'text') {
       contentHtml += `<div class="message-text">${this.formatText(msg.text)}</div>`;
     } else if (msg.type === 'image') {
       const fullUrl = this.getFullMediaUrl(msg.fileUrl);
-      contentHtml += `
-        <img class="message-image" src="${fullUrl}" alt="Фото" onclick="window.messengerApp.openImageModal('${fullUrl}')" loading="lazy">
-      `;
+      contentHtml += `<img class="message-image" src="${fullUrl}" alt="Фото" onclick="window.messengerApp.openImageModal('${fullUrl}')" loading="lazy">`;
     } else if (msg.type === 'voice') {
       const fullUrl = this.getFullMediaUrl(msg.fileUrl);
       const durationStr = VoiceManager.formatTime(msg.duration || 0);
@@ -372,7 +627,10 @@ class MessengerApp {
     `;
 
     bubble.innerHTML = contentHtml;
-    this.chatMessages.appendChild(bubble);
+    row.innerHTML = avatarHtml;
+    row.appendChild(bubble);
+
+    this.chatMessages.appendChild(row);
   }
 
   toggleVoicePlay(buttonEl, audioUrl) {
@@ -413,27 +671,33 @@ class MessengerApp {
 
   renderMembersList(users) {
     this.membersList.innerHTML = '';
-    const otherUsers = users.filter(u => u.username !== this.username);
+    const otherUsers = users.filter(u => !this.user || u.username !== this.user.username);
 
     if (otherUsers.length === 0) {
-      this.membersList.innerHTML = '<p style="color: var(--text-muted); font-size: 13px; text-align: center; margin-top: 20px;">Пока никто из родных не подключился.<br>Поделитесь с ними кодом комнаты: <b>' + this.roomId + '</b></p>';
+      this.membersList.innerHTML = '<p style="color: var(--text-muted); font-size: 13px; text-align: center; margin-top: 20px;">Пока никто из родных не подключился.<br>Поделитесь кодом комнаты: <b>' + this.roomId + '</b></p>';
       return;
     }
 
     otherUsers.forEach(user => {
       const item = document.createElement('div');
       item.className = 'member-item';
+
+      const avatarSrc = user.avatar ? this.getFullMediaUrl(user.avatar) : null;
+      const initial = (user.displayName || user.username || 'Р').charAt(0).toUpperCase();
+
       item.innerHTML = `
-        <div class="member-info">
-          <div class="member-avatar">${user.username.charAt(0).toUpperCase()}</div>
-          <div>
-            <div class="member-name">${this.escapeHtml(user.username)}</div>
-            <span style="font-size: 11px; color: ${user.inCall ? 'var(--warning)' : 'var(--success)'};">
-              ${user.inCall ? '● в звонке' : '● на связи'}
+        <div class="member-info" onclick="window.messengerApp.viewUserProfile('${this.escapeHtml(user.username)}')">
+          <div class="member-avatar">
+            ${avatarSrc ? `<img src="${avatarSrc}" alt="Avatar">` : initial}
+          </div>
+          <div class="member-texts">
+            <div class="member-name">${this.escapeHtml(user.displayName || user.username)}</div>
+            <span class="member-status-sub" style="color: ${user.inCall ? 'var(--warning)' : 'var(--success)'};">
+              ${user.inCall ? '● в звонке' : (user.bio ? this.escapeHtml(user.bio) : '● в сети')}
             </span>
           </div>
         </div>
-        <button class="member-call-btn" onclick="window.callManager.startCall('${user.id}', '${this.escapeHtml(user.username)}')">
+        <button class="member-call-btn" onclick="window.callManager.startCall('${user.id}', '${this.escapeHtml(user.displayName || user.username)}')">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
           Звонок
         </button>
@@ -443,12 +707,12 @@ class MessengerApp {
   }
 
   handleQuickCall() {
-    const available = this.onlineMembers.find(u => u.username !== this.username && !u.inCall);
+    const available = this.onlineMembers.find(u => (!this.user || u.username !== this.user.username) && !u.inCall);
     if (!available) {
       alert('Никого из родственников сейчас нет в сети или все заняты разговором.');
       return;
     }
-    window.callManager.startCall(available.id, available.username);
+    window.callManager.startCall(available.id, available.displayName || available.username);
   }
 
   toggleDrawer(open) {
@@ -461,20 +725,113 @@ class MessengerApp {
     }
   }
 
-  openImageModal(url) {
-    this.modalImage.src = url;
-    this.modalDownload.href = url;
-    this.imageModal.classList.remove('hidden');
+  // ================= Profile Modals =================
+  openMyProfile() {
+    if (!this.user) return;
+    this.myProfileUsernameTag.textContent = `@${this.user.username}`;
+    this.editDisplayName.value = this.user.displayName || '';
+    this.editBio.value = this.user.bio || '';
+    this.editAvatarUrl = this.user.avatar;
+
+    if (this.user.avatar) {
+      const url = this.getFullMediaUrl(this.user.avatar);
+      this.editAvatarPreview.innerHTML = `<img src="${url}" alt="Аватар"><div class="avatar-badge-btn">📷</div>`;
+    } else {
+      const letter = (this.user.displayName || 'Я').charAt(0).toUpperCase();
+      this.editAvatarPreview.innerHTML = `<span>${letter}</span><div class="avatar-badge-btn">📷</div>`;
+    }
+
+    this.myProfileModal.classList.remove('hidden');
   }
 
-  closeImageModal() {
-    this.imageModal.classList.add('hidden');
-    this.modalImage.src = '';
+  closeMyProfile() {
+    this.myProfileModal.classList.add('hidden');
   }
 
+  async saveMyProfile() {
+    const displayName = this.editDisplayName.value.trim();
+    const bio = this.editBio.value.trim();
+
+    try {
+      const res = await fetch(`${this.serverUrl}/api/profile/update`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.token}`
+        },
+        body: JSON.stringify({
+          displayName,
+          bio,
+          avatar: this.editAvatarUrl
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Ошибка обновления профиля');
+
+      this.user = data.user;
+      localStorage.setItem('family_user', JSON.stringify(this.user));
+      this.updateHeaderAvatar();
+      this.closeMyProfile();
+      alert('Профиль успешно обновлен!');
+    } catch (err) {
+      alert(err.message);
+    }
+  }
+
+  async viewUserProfile(username) {
+    if (!username) return;
+    if (this.user && username === this.user.username) {
+      return this.openMyProfile();
+    }
+
+    try {
+      const res = await fetch(`${this.serverUrl}/api/profile/${encodeURIComponent(username)}`);
+      if (!res.ok) throw new Error('Профиль не найден');
+      const data = await res.json();
+      const u = data.user;
+
+      this.viewProfileName.textContent = u.displayName || u.username;
+      this.viewProfileUsername.textContent = `@${u.username}`;
+      this.viewProfileBio.textContent = u.bio || 'Статус не указан';
+      this.viewProfileOnline.innerHTML = u.isOnline ? '<span style="color: var(--success)">● В сети</span>' : '<span style="color: var(--text-muted)">○ Не в сети</span>';
+
+      if (u.avatar) {
+        this.viewProfileAvatarBox.innerHTML = `<img src="${this.getFullMediaUrl(u.avatar)}" alt="Avatar">`;
+      } else {
+        const letter = (u.displayName || u.username || 'Р').charAt(0).toUpperCase();
+        this.viewProfileAvatarBox.innerHTML = `<span>${letter}</span>`;
+      }
+
+      // Actions
+      this.btnProfileCall.onclick = () => {
+        this.closeUserProfile();
+        const onlineUser = this.onlineMembers.find(m => m.username === u.username);
+        if (onlineUser) {
+          window.callManager.startCall(onlineUser.id, u.displayName || u.username);
+        } else {
+          alert('Родственник сейчас не в сети для звонка');
+        }
+      };
+
+      this.btnProfileMessage.onclick = () => {
+        this.closeUserProfile();
+        this.messageInput.focus();
+      };
+
+      this.userProfileModal.classList.remove('hidden');
+    } catch (err) {
+      alert('Не удалось открыть профиль: ' + err.message);
+    }
+  }
+
+  closeUserProfile() {
+    this.userProfileModal.classList.add('hidden');
+  }
+
+  // ================= Settings & Logout =================
   openSettings() {
     this.settingsServerUrl.value = this.serverUrl;
-    this.settingsUsername.value = this.username;
     this.settingsRoom.value = this.roomId;
     this.settingsModal.classList.remove('hidden');
   }
@@ -485,11 +842,9 @@ class MessengerApp {
 
   saveSettings() {
     this.serverUrl = this.settingsServerUrl.value.trim();
-    this.username = this.settingsUsername.value.trim();
     this.roomId = this.settingsRoom.value.trim().toLowerCase();
 
     localStorage.setItem('family_server_url', this.serverUrl);
-    localStorage.setItem('family_username', this.username);
     localStorage.setItem('family_room', this.roomId);
 
     this.closeSettings();
@@ -497,9 +852,22 @@ class MessengerApp {
   }
 
   logout() {
-    localStorage.removeItem('family_username');
-    localStorage.removeItem('family_room');
-    location.reload();
+    if (confirm('Вы уверены, что хотите выйти из аккаунта на этом устройстве? Вы сможете войти снова в любой момент!')) {
+      localStorage.removeItem('family_token');
+      localStorage.removeItem('family_user');
+      location.reload();
+    }
+  }
+
+  openImageModal(url) {
+    this.modalImage.src = url;
+    this.modalDownload.href = url;
+    this.imageModal.classList.remove('hidden');
+  }
+
+  closeImageModal() {
+    this.imageModal.classList.add('hidden');
+    this.modalImage.src = '';
   }
 
   scrollToBottom() {
@@ -533,7 +901,6 @@ class MessengerApp {
 
   formatText(text) {
     const escaped = this.escapeHtml(text);
-    // Convert links
     return escaped.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" style="color: #93c5fd; text-decoration: underline;">$1</a>');
   }
 }

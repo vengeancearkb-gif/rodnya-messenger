@@ -149,7 +149,7 @@ class CallManager {
   }
 
   // Handle incoming call notification
-  handleIncomingCall({ fromUserId, fromUsername, offer }) {
+  handleIncomingCall({ fromUserId, fromUsername, fromAvatar, offer }) {
     if (this.peerConnection) {
       window.messengerApp.socket.emit('call-reject', {
         targetUserId: fromUserId,
@@ -158,8 +158,19 @@ class CallManager {
       return;
     }
 
-    this.pendingOffer = { fromUserId, fromUsername, offer };
+    this.pendingOffer = { fromUserId, fromUsername, fromAvatar, offer };
     this.incomingCallerName.textContent = fromUsername || 'Родственник';
+
+    const incomingAvatarBox = document.getElementById('incoming-avatar-box');
+    if (incomingAvatarBox) {
+      if (fromAvatar) {
+        incomingAvatarBox.innerHTML = `<img src="${window.messengerApp.getFullMediaUrl(fromAvatar)}" alt="Avatar">`;
+      } else {
+        const letter = (fromUsername || 'Р').charAt(0).toUpperCase();
+        incomingAvatarBox.innerHTML = `<span>${letter}</span>`;
+      }
+    }
+
     this.incomingDialog.classList.remove('hidden');
     window.soundManager.startRingtone();
   }
@@ -173,8 +184,8 @@ class CallManager {
     this.unlockAndPlayAudio();
 
     if (!this.pendingOffer) return;
-    const { fromUserId, fromUsername, offer } = this.pendingOffer;
-    this.currentCallTarget = { id: fromUserId, name: fromUsername };
+    const { fromUserId, fromUsername, fromAvatar, offer } = this.pendingOffer;
+    this.currentCallTarget = { id: fromUserId, name: fromUsername, avatar: fromAvatar };
     this.pendingOffer = null;
 
     try {
@@ -185,7 +196,7 @@ class CallManager {
       return;
     }
 
-    this.showCallScreen(fromUsername, 'Соединение...');
+    this.showCallScreen(fromUsername, 'Соединение...', fromAvatar);
     this.createPeerConnection();
 
     this.localStream.getTracks().forEach(track => {
@@ -367,12 +378,23 @@ class CallManager {
     }, 1000);
   }
 
-  showCallScreen(contactName, status) {
+  showCallScreen(contactName, status, avatarUrl) {
     this.callContactName.textContent = contactName || 'Аудиозвонок';
     this.callStatusLabel.textContent = status || '';
     this.callTimer.textContent = '00:00';
     this.isMuted = false;
     this.btnToggleMic.classList.remove('muted');
+
+    const callAvatarBox = document.getElementById('call-avatar-box');
+    if (callAvatarBox) {
+      if (avatarUrl) {
+        callAvatarBox.innerHTML = `<img src="${window.messengerApp.getFullMediaUrl(avatarUrl)}" alt="Avatar"><div class="call-ripple"></div>`;
+      } else {
+        const letter = (contactName || 'Р').charAt(0).toUpperCase();
+        callAvatarBox.innerHTML = `<span id="call-avatar-letter">${letter}</span><div class="call-ripple"></div>`;
+      }
+    }
+
     if (this.btnUnmuteCall) this.btnUnmuteCall.classList.add('hidden');
     this.callScreen.classList.remove('hidden');
   }

@@ -9,34 +9,100 @@
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%236366f1'><path d='M12 2C6.48 2 2 6.48 2 12c0 1.85.5 3.58 1.38 5.07L2 22l5.07-1.38C8.54 21.49 10.22 22 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2zm1 14h-2v-2h2v2zm0-4h-2V7h2v5z'/></svg>">
 </head>
 <body>
-  <!-- Login / Setup Screen -->
+  <!-- Login & Register Screen -->
   <div id="login-screen" class="screen active">
     <div class="login-card">
       <div class="logo-box">
         <div class="logo-icon">💬</div>
         <h1>Родня</h1>
-        <p class="subtitle">Быстрый мессенджер для связи с близкими в любой точке мира</p>
+        <p class="subtitle">Быстрый мессенджер для связи с близкими по всему миру</p>
       </div>
 
+      <!-- Segmented Auth Tabs -->
+      <div class="auth-tabs">
+        <button type="button" class="auth-tab active" id="tab-login-btn">Вход</button>
+        <button type="button" class="auth-tab" id="tab-register-btn">Создать профиль</button>
+      </div>
+
+      <!-- Alert Message Box -->
+      <div id="auth-alert" class="alert-box"></div>
+
+      <!-- Form 1: Login -->
       <form id="login-form">
         <div class="input-group">
-          <label for="username-input">Ваше имя</label>
-          <input type="text" id="username-input" placeholder="Например: Мама, Папа, Алексей" required maxlength="30" autocomplete="name">
+          <label for="login-username">Логин (никнейм)</label>
+          <input type="text" id="login-username" placeholder="Например: mama или alex" required autocomplete="username">
         </div>
 
         <div class="input-group">
-          <label for="room-input">Код семейной комнаты</label>
-          <input type="text" id="room-input" placeholder="Например: rodnya2026" required value="semya" maxlength="30">
-          <span class="hint">У всех родственников должен быть одинаковый код комнаты</span>
+          <label for="login-password">Пароль или PIN-код</label>
+          <input type="password" id="login-password" placeholder="Введите пароль" required autocomplete="current-password">
         </div>
 
         <div class="input-group">
-          <label for="server-input">Адрес сервера (бэкенд)</label>
-          <input type="url" id="server-input" value="https://rodnya-messenger.onrender.com">
-          <span class="hint">Ваш облачный сервер для стабильной международной связи</span>
+          <label for="login-room">Код семейной комнаты</label>
+          <input type="text" id="login-room" value="semya" required maxlength="30">
+          <span class="hint">У всех членов семьи должен быть одинаковый код</span>
         </div>
 
-        <button type="submit" class="btn btn-primary btn-block">Войти в общение</button>
+        <div class="input-group">
+          <label for="login-server-url">Адрес сервера (облако)</label>
+          <input type="url" id="login-server-url" value="https://rodnya-messenger.onrender.com">
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-block">Войти в мессенджер</button>
+      </form>
+
+      <!-- Form 2: Register Profile -->
+      <form id="register-form" class="hidden">
+        <!-- Avatar Upload Picker -->
+        <div class="avatar-picker-wrap">
+          <div class="avatar-preview-circle" id="reg-avatar-preview">
+            <span id="reg-avatar-letter">👤</span>
+            <div class="avatar-badge-btn">📷</div>
+          </div>
+          <span class="avatar-picker-label" id="reg-avatar-btn">Загрузить фото профиля</span>
+          <input type="file" id="reg-avatar-input" accept="image/*" style="display: none;">
+        </div>
+
+        <div class="input-group">
+          <label for="reg-displayname">Ваше имя (как вас зовут)</label>
+          <input type="text" id="reg-displayname" placeholder="Например: Мама, Папа, Алексей" required maxlength="40">
+        </div>
+
+        <div class="input-group">
+          <label for="reg-username">Логин (для входа на любом устройстве)</label>
+          <input type="text" id="reg-username" placeholder="Например: mama или alex" required maxlength="30" autocomplete="username">
+          <span class="hint">Только буквы и цифры без пробелов</span>
+        </div>
+
+        <div class="input-group">
+          <label for="reg-password">Пароль или PIN-код</label>
+          <input type="password" id="reg-password" placeholder="Придумайте пароль или PIN" required minlength="3" autocomplete="new-password">
+          <span class="hint">Нужен для входа в свой профиль с других телефонов или браузера</span>
+        </div>
+
+        <div class="input-group">
+          <label for="reg-bio">О себе / Статус</label>
+          <input type="text" id="reg-bio" placeholder="Например: На связи из Германии 🇩🇪" maxlength="100">
+        </div>
+
+        <div class="input-group">
+          <label for="reg-room">Код семейной комнаты</label>
+          <input type="text" id="reg-room" value="semya" required maxlength="30">
+        </div>
+
+        <div class="input-group">
+          <label for="reg-server-url">Адрес сервера (облако)</label>
+          <input type="url" id="reg-server-url" value="https://rodnya-messenger.onrender.com">
+        </div>
+
+        <div class="persistent-notice">
+          <span>🔒</span>
+          <span>Ваш профиль сохранится на сервере. Родственники смогут войти с любого устройства (через приложение или браузер) под своим логином!</span>
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-block">Создать профиль и войти</button>
       </form>
     </div>
   </div>
@@ -46,11 +112,13 @@
     <!-- Top App Bar -->
     <header class="app-header">
       <div class="header-left">
-        <button id="btn-toggle-members" class="icon-btn" title="Участники">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+        <!-- My Profile Avatar Button -->
+        <button id="btn-my-profile" class="my-avatar-btn" title="Мой профиль">
+          <span id="header-avatar-letter">Я</span>
         </button>
+
         <div class="header-info">
-          <div class="room-title" id="room-title">Комната: Семья</div>
+          <div class="room-title" id="room-title">Комната: СЕМЬЯ</div>
           <div class="connection-status" id="connection-status">
             <span class="status-dot online"></span>
             <span class="status-text">Подключено</span>
@@ -63,6 +131,9 @@
         <button id="btn-quick-call" class="icon-btn call-btn-top" title="Позвонить близким">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
         </button>
+        <button id="btn-toggle-members" class="icon-btn" title="Участники комнаты">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+        </button>
         <button id="btn-settings" class="icon-btn" title="Настройки">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
         </button>
@@ -72,7 +143,7 @@
     <!-- Side Drawer: Members list -->
     <div id="members-drawer" class="drawer">
       <div class="drawer-header">
-        <h3>Участники в комнате</h3>
+        <h3>Родные в комнате</h3>
         <button id="btn-close-drawer" class="icon-btn">&times;</button>
       </div>
       <div id="members-list" class="members-list">
@@ -85,9 +156,8 @@
     <main id="chat-messages" class="messages-container">
       <div class="system-welcome">
         <div class="welcome-badge">🔒 Защищенный семейный чат</div>
-        <p>Сообщения и звонки передаются напрямую по защищенному каналу.</p>
+        <p>Сообщения, файлы и звонки передаются напрямую по защищенному каналу.</p>
       </div>
-      <!-- Messages rendered dynamically -->
     </main>
 
     <!-- Typing Indicator -->
@@ -96,7 +166,7 @@
       <span class="dot"></span><span class="dot"></span><span class="dot"></span>
     </div>
 
-    <!-- Voice Recording Banner (Shown while recording voice message) -->
+    <!-- Voice Recording Banner -->
     <div id="voice-recording-banner" class="voice-banner hidden">
       <div class="recording-pulse"></div>
       <span class="recording-timer" id="recording-timer">00:00</span>
@@ -111,21 +181,17 @@
 
     <!-- Bottom Message Input Bar -->
     <footer class="app-input-bar">
-      <!-- File attachment button -->
       <button id="btn-attach" class="icon-btn attach-btn" title="Прикрепить фото или файл">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
       </button>
       <input type="file" id="file-input" style="display: none;" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.zip,.txt">
 
-      <!-- Text input -->
       <textarea id="message-input" placeholder="Сообщение..." rows="1" maxlength="4000"></textarea>
 
-      <!-- Record voice button -->
       <button id="btn-record-voice" class="icon-btn voice-btn" title="Голосовое сообщение">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
       </button>
 
-      <!-- Send text button -->
       <button id="btn-send" class="icon-btn send-btn" title="Отправить">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
       </button>
@@ -135,13 +201,14 @@
   <!-- Audio Call Overlay: In Call Screen -->
   <div id="call-screen" class="call-overlay hidden">
     <div class="call-container">
-      <div class="caller-avatar">
+      <div class="caller-avatar" id="call-avatar-box">
         <span id="call-avatar-letter">📞</span>
         <div class="call-ripple"></div>
       </div>
       <h2 id="call-contact-name">Аудиозвонок</h2>
       <div id="call-status-label" class="call-status">Установка соединения...</div>
       <div id="call-timer" class="call-timer">00:00</div>
+
       <button id="btn-unmute-call" class="btn btn-primary hidden" style="margin-bottom: 20px; font-size: 14px;">🔊 Нажмите, чтобы включить звук</button>
 
       <div class="call-actions">
@@ -158,9 +225,11 @@
   <!-- Incoming Call Dialog -->
   <div id="incoming-call-dialog" class="incoming-dialog hidden">
     <div class="incoming-card">
-      <div class="incoming-avatar">🔔</div>
+      <div class="incoming-avatar" id="incoming-avatar-box">
+        <span id="incoming-avatar-letter">🔔</span>
+      </div>
       <h3 id="incoming-caller-name">Входящий аудиозвонок</h3>
-      <p>Вам звонят через защищенный канал</p>
+      <p>Вам звонят по защищенному каналу</p>
       <div class="incoming-buttons">
         <button id="btn-reject-call" class="btn-incoming reject" title="Отклонить">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
@@ -174,41 +243,109 @@
     </div>
   </div>
 
-  <!-- Image Viewer Modal -->
+  <!-- Modal 1: My Profile (Edit Profile) -->
+  <div id="my-profile-modal" class="modal hidden">
+    <div class="modal-backdrop" id="my-profile-backdrop"></div>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Мой профиль</h3>
+        <button id="my-profile-close" class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="avatar-picker-wrap">
+          <div class="avatar-preview-circle" id="edit-avatar-preview">
+            <span id="edit-avatar-letter">👤</span>
+            <div class="avatar-badge-btn">📷</div>
+          </div>
+          <span class="avatar-picker-label" id="edit-avatar-btn">Сменить фото</span>
+          <input type="file" id="edit-avatar-input" accept="image/*" style="display: none;">
+        </div>
+
+        <div class="profile-header-info">
+          <span class="profile-username-tag" id="my-profile-username-tag">@username</span>
+        </div>
+
+        <div class="input-group">
+          <label for="edit-displayname">Отображаемое имя</label>
+          <input type="text" id="edit-displayname" maxlength="40">
+        </div>
+
+        <div class="input-group">
+          <label for="edit-bio">О себе / Статус</label>
+          <input type="text" id="edit-bio" maxlength="100" placeholder="Например: На связи">
+        </div>
+
+        <button id="btn-save-profile" class="btn btn-primary btn-block" style="margin-top: 8px;">Сохранить профиль</button>
+        <button id="btn-logout" class="btn btn-danger btn-block" style="margin-top: 10px;">Выйти из аккаунта</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 2: View Another User Profile -->
+  <div id="user-profile-modal" class="modal hidden">
+    <div class="modal-backdrop" id="user-profile-backdrop"></div>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Профиль родственника</h3>
+        <button id="user-profile-close" class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="profile-modal-avatar" id="view-profile-avatar-box">
+          <span id="view-profile-letter">👤</span>
+        </div>
+        <div class="profile-header-info">
+          <h3 id="view-profile-name">Имя</h3>
+          <span class="profile-username-tag" id="view-profile-username">@username</span>
+          <div id="view-profile-online" style="font-size: 12px; margin-top: 4px; color: var(--success);">● В сети</div>
+        </div>
+
+        <div class="profile-status-box" id="view-profile-bio">
+          Статус не указан
+        </div>
+
+        <div class="profile-action-buttons">
+          <button id="btn-profile-call" class="btn btn-primary" style="flex: 1; background: var(--success);">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
+            Позвонить
+          </button>
+          <button id="btn-profile-message" class="btn btn-outline" style="flex: 1;">
+            💬 Написать
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 3: Settings Modal -->
+  <div id="settings-modal" class="modal hidden">
+    <div class="modal-backdrop" id="settings-backdrop"></div>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Настройки</h3>
+        <button id="settings-close" class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="input-group">
+          <label>URL сервера мессенджера</label>
+          <input type="text" id="settings-server-url" value="https://rodnya-messenger.onrender.com">
+          <span class="hint">Адрес вашего облачного сервера</span>
+        </div>
+        <div class="input-group">
+          <label>Семейная комната</label>
+          <input type="text" id="settings-room" value="semya">
+        </div>
+        <button id="btn-save-settings" class="btn btn-primary btn-block">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 4: Image Viewer Modal -->
   <div id="image-modal" class="modal hidden">
     <div class="modal-backdrop" id="modal-backdrop"></div>
     <div class="modal-content">
       <button class="modal-close" id="modal-close">&times;</button>
       <img id="modal-image" src="" alt="Просмотр фото">
       <a id="modal-download" class="btn btn-outline" download>Скачать оригинал</a>
-    </div>
-  </div>
-
-  <!-- Settings Modal -->
-  <div id="settings-modal" class="modal hidden">
-    <div class="modal-backdrop" id="settings-backdrop"></div>
-    <div class="modal-card">
-      <div class="modal-header">
-        <h3>Настройки подключения</h3>
-        <button id="settings-close" class="icon-btn">&times;</button>
-      </div>
-      <div class="modal-body">
-        <div class="input-group">
-          <label>URL сервера мессенджера</label>
-          <input type="text" id="settings-server-url" placeholder="https://ваш-сервер.onrender.com">
-          <span class="hint">Укажите адрес облачного бэкенда для связи между странами</span>
-        </div>
-        <div class="input-group">
-          <label>Ваше имя</label>
-          <input type="text" id="settings-username">
-        </div>
-        <div class="input-group">
-          <label>Код семейной комнаты</label>
-          <input type="text" id="settings-room">
-        </div>
-        <button id="btn-save-settings" class="btn btn-primary btn-block">Сохранить и переподключиться</button>
-        <button id="btn-logout" class="btn btn-danger btn-block" style="margin-top: 10px;">Сменить аккаунт</button>
-      </div>
     </div>
   </div>
 
