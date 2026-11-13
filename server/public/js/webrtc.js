@@ -150,6 +150,10 @@ class CallManager {
 
   // Handle incoming call notification
   handleIncomingCall({ fromUserId, fromUsername, fromAvatar, offer }) {
+    if (window.AndroidApp && window.AndroidApp.stopRinging) {
+      window.AndroidApp.stopRinging();
+    }
+
     if (this.peerConnection) {
       window.messengerApp.socket.emit('call-reject', {
         targetUserId: fromUserId,
@@ -177,6 +181,9 @@ class CallManager {
 
   // User presses Accept
   async acceptIncomingCall() {
+    if (window.AndroidApp && window.AndroidApp.stopRinging) {
+      window.AndroidApp.stopRinging();
+    }
     window.soundManager.stopRingtone();
     this.incomingDialog.classList.add('hidden');
 
@@ -226,6 +233,9 @@ class CallManager {
 
   // User presses Reject
   rejectIncomingCall() {
+    if (window.AndroidApp && window.AndroidApp.stopRinging) {
+      window.AndroidApp.stopRinging();
+    }
     window.soundManager.stopRingtone();
     this.incomingDialog.classList.add('hidden');
 
@@ -241,6 +251,9 @@ class CallManager {
   // Remote party answered our call
   async handleCallAnswered({ fromUserId, answer }) {
     if (!this.peerConnection) return;
+    if (fromUserId && this.currentCallTarget) {
+      this.currentCallTarget.id = fromUserId;
+    }
     try {
       await this.peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
       await this.drainIceCandidates();
@@ -401,6 +414,9 @@ class CallManager {
 
   // End call
   endCall(notifyPeer = true) {
+    if (window.AndroidApp && window.AndroidApp.stopRinging) {
+      window.AndroidApp.stopRinging();
+    }
     window.soundManager.stopRingtone();
     window.soundManager.playEndCallSound();
 
@@ -440,3 +456,14 @@ class CallManager {
 }
 
 window.callManager = new CallManager();
+
+window.handleNativeIncomingCall = function(data, autoAnswer) {
+  if (!window.callManager || !data) return;
+  console.log('Received native incoming call:', data, 'autoAnswer:', autoAnswer);
+  window.callManager.handleIncomingCall(data);
+  if (autoAnswer) {
+    setTimeout(() => {
+      window.callManager.acceptIncomingCall();
+    }, 400);
+  }
+};

@@ -356,27 +356,38 @@ function getRoomHistory(roomId) {
 }
 
 function getRoomUsers(roomId) {
-  const users = [];
+  const usersMap = new Map();
   for (const [id, user] of onlineUsers.entries()) {
     if (user.roomId === roomId) {
-      users.push({
-        id: user.socketId,
-        username: user.username,
-        displayName: user.displayName || user.username,
-        avatar: user.avatar || null,
-        bio: user.bio || '',
-        inCall: user.inCall || false
-      });
+      const existing = usersMap.get(user.username.toLowerCase());
+      if (!existing) {
+        usersMap.set(user.username.toLowerCase(), {
+          id: user.socketId,
+          username: user.username,
+          displayName: user.displayName || user.username,
+          avatar: user.avatar || null,
+          bio: user.bio || '',
+          inCall: user.inCall || false,
+          isNativeBackground: user.isNativeBackground || false
+        });
+      } else {
+        if (user.inCall) existing.inCall = true;
+        // Prefer foreground / web session for direct call target ID
+        if (!user.isNativeBackground && existing.isNativeBackground) {
+          existing.id = user.socketId;
+          existing.isNativeBackground = false;
+        }
+      }
     }
   }
-  return users;
+  return Array.from(usersMap.values());
 }
 
 io.on('connection', (socket) => {
   let currentUser = null;
 
   // User joins a room / family space
-  socket.on('join-room', ({ token, username, displayName, avatar, bio, roomId }) => {
+  socket.on('join-room', ({ token, username, displayName, avatar, bio, roomId, isNativeBackground }) => {
     const cleanRoomId = (roomId || 'semya').trim().toLowerCase();
 
     // Check if authenticated user by token
@@ -398,7 +409,8 @@ io.on('connection', (socket) => {
       avatar: finalAvatar,
       bio: finalBio,
       roomId: cleanRoomId,
-      inCall: false
+      inCall: false,
+      isNativeBackground: !!isNativeBackground
     };
 
     socket.join(cleanRoomId);
@@ -411,12 +423,14 @@ io.on('connection', (socket) => {
     // Notify room of online users list
     io.to(cleanRoomId).emit('users-update', getRoomUsers(cleanRoomId));
 
-    // Emit system notice
-    socket.to(cleanRoomId).emit('user-joined', {
-      username: currentUser.displayName || currentUser.username,
-      id: socket.id,
-      time: new Date().toISOString()
-    });
+    // Emit system notice only for interactive user connections
+    if (!isNativeBackground) {
+      socket.to(cleanRoomId).emit('user-joined', {
+        username: currentUser.displayName || currentUser.username,
+        id: socket.id,
+        time: new Date().toISOString()
+      });
+    }
   });
 
   // Sending a message
@@ -462,27 +476,53 @@ io.on('connection', (socket) => {
   });
 
   // ================= WebRTC Audio Calling =================
-  socket.on('call-user', ({ targetUserId, offer }) => {
+  socket.on('call-user', ({ targetUserId, targetUsername, offer }) => {
     if (!currentUser) return;
-    const target = onlineUsers.get(targetUserId);
 
-    if (!target) {
+    // Find all sockets for target user
+    let targetSockets = [];
+    if (targetUsername) {
+      for (const [sId, u] of onlineUsers.entries()) {
+        if (u.username.toLowerCase() === targetUsername.toLowerCase() && sId !== socket.id) {
+          targetSockets.push({ socketId: sId, user: u });
+        }
+      }
+    } else if (targetUserId) {
+      const directTarget = onlineUsers.get(targetUserId);
+      if (directTarget) {
+        for (const [sId, u] of onlineUsers.entries()) {
+          if (u.username.toLowerCase() === directTarget.username.toLowerCase() && sId !== socket.id) {
+            targetSockets.push({ socketId: sId, user: u });
+          }
+        }
+      }
+    }
+
+    if (targetSockets.length === 0) {
       return socket.emit('call-error', { message: 'Собеседник не в сети' });
     }
 
-    if (target.inCall) {
+    const isAnyInCall = targetSockets.some(t => t.user.inCall);
+    if (isAnyInCall) {
       return socket.emit('call-busy', { targetUserId, message: 'Собеседник занят другим звонком' });
     }
 
     currentUser.inCall = true;
+    for (const t of targetSockets) {
+      t.user.inCall = true;
+    }
     io.to(currentUser.roomId).emit('users-update', getRoomUsers(currentUser.roomId));
 
-    io.to(targetUserId).emit('call-incoming', {
-      fromUserId: socket.id,
-      fromUsername: currentUser.displayName || currentUser.username,
-      fromAvatar: currentUser.avatar || null,
-      offer
-    });
+    // Emit incoming call to all sockets of target (background service + active app)
+    for (const t of targetSockets) {
+      io.to(t.socketId).emit('call-incoming', {
+        fromUserId: socket.id,
+        fromUsername: currentUser.displayName || currentUser.username,
+        fromAvatar: currentUser.avatar || null,
+        targetUsername: t.user.username,
+        offer
+      });
+    }
   });
 
   socket.on('call-answer', ({ targetUserId, answer }) => {
@@ -499,32 +539,55 @@ io.on('connection', (socket) => {
   socket.on('call-reject', ({ targetUserId, reason }) => {
     if (currentUser) {
       currentUser.inCall = false;
+      for (const [sId, u] of onlineUsers.entries()) {
+        if (u.username.toLowerCase() === currentUser.username.toLowerCase()) {
+          u.inCall = false;
+        }
+      }
       io.to(currentUser.roomId).emit('users-update', getRoomUsers(currentUser.roomId));
     }
-    const target = onlineUsers.get(targetUserId);
-    if (target) {
-      target.inCall = false;
-      io.to(target.roomId).emit('users-update', getRoomUsers(target.roomId));
-    }
 
-    io.to(targetUserId).emit('call-rejected', {
-      fromUserId: socket.id,
-      reason: reason || 'Отклонён'
-    });
+    const directTarget = onlineUsers.get(targetUserId);
+    if (directTarget) {
+      for (const [sId, u] of onlineUsers.entries()) {
+        if (u.username.toLowerCase() === directTarget.username.toLowerCase()) {
+          u.inCall = false;
+          io.to(sId).emit('call-rejected', {
+            fromUserId: socket.id,
+            reason: reason || 'Отклонён'
+          });
+        }
+      }
+      io.to(directTarget.roomId).emit('users-update', getRoomUsers(directTarget.roomId));
+    } else if (targetUserId) {
+      io.to(targetUserId).emit('call-rejected', {
+        fromUserId: socket.id,
+        reason: reason || 'Отклонён'
+      });
+    }
   });
 
   socket.on('call-end', ({ targetUserId }) => {
     if (currentUser) {
       currentUser.inCall = false;
+      for (const [sId, u] of onlineUsers.entries()) {
+        if (u.username.toLowerCase() === currentUser.username.toLowerCase()) {
+          u.inCall = false;
+        }
+      }
       io.to(currentUser.roomId).emit('users-update', getRoomUsers(currentUser.roomId));
     }
-    const target = onlineUsers.get(targetUserId);
-    if (target) {
-      target.inCall = false;
-      io.to(target.roomId).emit('users-update', getRoomUsers(target.roomId));
-    }
 
-    if (targetUserId) {
+    const directTarget = onlineUsers.get(targetUserId);
+    if (directTarget) {
+      for (const [sId, u] of onlineUsers.entries()) {
+        if (u.username.toLowerCase() === directTarget.username.toLowerCase()) {
+          u.inCall = false;
+          io.to(sId).emit('call-ended', { fromUserId: socket.id });
+        }
+      }
+      io.to(directTarget.roomId).emit('users-update', getRoomUsers(directTarget.roomId));
+    } else if (targetUserId) {
       io.to(targetUserId).emit('call-ended', { fromUserId: socket.id });
     }
   });
@@ -540,11 +603,13 @@ io.on('connection', (socket) => {
     if (currentUser) {
       onlineUsers.delete(socket.id);
       io.to(currentUser.roomId).emit('users-update', getRoomUsers(currentUser.roomId));
-      socket.to(currentUser.roomId).emit('user-left', {
-        username: currentUser.displayName || currentUser.username,
-        id: socket.id,
-        time: new Date().toISOString()
-      });
+      if (!currentUser.isNativeBackground) {
+        socket.to(currentUser.roomId).emit('user-left', {
+          username: currentUser.displayName || currentUser.username,
+          id: socket.id,
+          time: new Date().toISOString()
+        });
+      }
     }
   });
 });

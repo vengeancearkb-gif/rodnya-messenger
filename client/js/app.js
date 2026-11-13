@@ -353,13 +353,45 @@ class MessengerApp {
     }
   }
 
+  syncNativeCredentials() {
+    if (window.AndroidApp && window.AndroidApp.saveCredentials) {
+      try {
+        const url = this.serverUrl || window.location.origin || 'https://rodnya-messenger.onrender.com';
+        const tok = this.token || '';
+        const room = this.roomId || 'semya';
+        const uName = this.user ? this.user.username : '';
+        const dName = this.user ? (this.user.displayName || this.user.username) : '';
+        window.AndroidApp.saveCredentials(url, tok, room, uName, dName);
+      } catch (e) {
+        console.error('Error syncing credentials with AndroidApp:', e);
+      }
+    }
+  }
+
   enterMessenger() {
     this.loginScreen.classList.remove('active');
     this.appScreen.classList.add('active');
 
     this.roomTitle.textContent = `Комната: ${this.roomId.toUpperCase()}`;
     this.updateHeaderAvatar();
+    this.syncNativeCredentials();
     this.connect();
+
+    // Check if app was opened by native incoming call notification
+    if (window.AndroidApp && window.AndroidApp.getPendingCallData) {
+      try {
+        const raw = window.AndroidApp.getPendingCallData();
+        const auto = window.AndroidApp.shouldAutoAnswer ? window.AndroidApp.shouldAutoAnswer() : false;
+        if (raw && raw.length > 2) {
+          const callData = JSON.parse(raw);
+          if (window.handleNativeIncomingCall) {
+            window.handleNativeIncomingCall(callData, auto);
+          }
+        }
+      } catch (e) {
+        console.error('Error checking native pending call:', e);
+      }
+    }
   }
 
   updateHeaderAvatar() {
@@ -771,6 +803,7 @@ class MessengerApp {
 
       this.user = data.user;
       localStorage.setItem('family_user', JSON.stringify(this.user));
+      this.syncNativeCredentials();
       this.updateHeaderAvatar();
       this.closeMyProfile();
       alert('Профиль успешно обновлен!');
