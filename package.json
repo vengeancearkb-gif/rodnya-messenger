@@ -1,16 +1,28 @@
 {
-  "name": "mesenger",
+  "name": "rodnya-messenger",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Родня — Семейный Мессенджер для связи с близкими по всему миру",
+  "main": "server/server.js",
   "scripts": {
+    "start": "node server/server.js",
+    "build": "cd server && npm install",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": [],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "keywords": [
+    "messenger",
+    "webrtc",
+    "chat",
+    "voice-calls"
+  ],
   "type": "commonjs",
   "dependencies": {
     "@capacitor/android": "^8.6.2",
-    "@capacitor/cli": "^8.6.2",
     "@capacitor/core": "^8.6.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.6.2"
   }
 }

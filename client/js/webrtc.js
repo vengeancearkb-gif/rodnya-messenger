@@ -8,6 +8,8 @@ class CallManager {
     this.pendingOffer = null;
     this.iceCandidatesQueue = [];
     this.callTimerInterval = null;
+    this.outgoingRingingTimeout = null;
+    this.incomingRingingTimeout = null;
     this.callSeconds = 0;
     this.isMuted = false;
 
@@ -73,6 +75,17 @@ class CallManager {
     }
   }
 
+  clearTimeouts() {
+    if (this.outgoingRingingTimeout) {
+      clearTimeout(this.outgoingRingingTimeout);
+      this.outgoingRingingTimeout = null;
+    }
+    if (this.incomingRingingTimeout) {
+      clearTimeout(this.incomingRingingTimeout);
+      this.incomingRingingTimeout = null;
+    }
+  }
+
   // Ensure remote audio element is unmuted and playing
   unlockAndPlayAudio() {
     if (!this.remoteAudio) return;
@@ -117,6 +130,7 @@ class CallManager {
       username: finalUsername
     };
     this.iceCandidatesQueue = [];
+    this.clearTimeouts();
 
     // Pre-unlock audio element in user gesture context
     this.unlockAndPlayAudio();
@@ -124,7 +138,11 @@ class CallManager {
     try {
       this.localStream = await this.acquireMicrophone();
     } catch (err) {
-      alert('Ошибка доступа к микрофону: ' + (err.message || err.name));
+      if (window.messengerApp && window.messengerApp.showDialog) {
+        window.messengerApp.showDialog('Ошибка доступа к микрофону: ' + (err.message || err.name));
+      } else {
+        alert('Ошибка доступа к микрофону: ' + (err.message || err.name));
+      }
       return;
     }
 
@@ -144,11 +162,21 @@ class CallManager {
       });
       await this.peerConnection.setLocalDescription(offer);
 
-      window.messengerApp.socket.emit('call-user', {
-        targetUserId,
-        targetUsername: finalUsername,
-        offer
-      });
+      if (window.messengerApp && window.messengerApp.socket) {
+        window.messengerApp.socket.emit('call-user', {
+          targetUserId,
+          targetUsername: finalUsername,
+          offer
+        });
+      }
+
+      // 35-second outgoing call timeout
+      this.outgoingRingingTimeout = setTimeout(() => {
+        this.callStatusLabel.textContent = 'Собеседник не отвечает';
+        setTimeout(() => {
+          this.endCall(true);
+        }, 1500);
+      }, 35000);
     } catch (err) {
       console.error('Error creating offer:', err);
       this.endCall(true);
@@ -156,20 +184,23 @@ class CallManager {
   }
 
   // Handle incoming call notification
-  handleIncomingCall({ fromUserId, fromUsername, fromAvatar, offer }) {
+  handleIncomingCall({ fromUserId, fromUsername, fromAvatar, targetUsername, offer }) {
     if (window.AndroidApp && window.AndroidApp.stopRinging) {
       window.AndroidApp.stopRinging();
     }
 
     if (this.peerConnection) {
-      window.messengerApp.socket.emit('call-reject', {
-        targetUserId: fromUserId,
-        reason: 'Занят'
-      });
+      if (window.messengerApp && window.messengerApp.socket) {
+        window.messengerApp.socket.emit('call-reject', {
+          targetUserId: fromUserId,
+          reason: 'Занят'
+        });
+      }
       return;
     }
 
-    this.pendingOffer = { fromUserId, fromUsername, fromAvatar, offer };
+    this.clearTimeouts();
+    this.pendingOffer = { fromUserId, fromUsername, fromAvatar, targetUsername, offer };
     this.incomingCallerName.textContent = fromUsername || 'Родственник';
 
     const incomingAvatarBox = document.getElementById('incoming-avatar-box');
@@ -184,10 +215,16 @@ class CallManager {
 
     this.incomingDialog.classList.remove('hidden');
     window.soundManager.startRingtone();
+
+    // 40-second incoming call timeout: dismiss automatically if ignored
+    this.incomingRingingTimeout = setTimeout(() => {
+      this.rejectIncomingCall();
+    }, 40000);
   }
 
   // User presses Accept
   async acceptIncomingCall() {
+    this.clearTimeouts();
     if (window.AndroidApp && window.AndroidApp.stopRinging) {
       window.AndroidApp.stopRinging();
     }
@@ -199,13 +236,22 @@ class CallManager {
 
     if (!this.pendingOffer) return;
     const { fromUserId, fromUsername, fromAvatar, offer } = this.pendingOffer;
-    this.currentCallTarget = { id: fromUserId, name: fromUsername, avatar: fromAvatar };
+    this.currentCallTarget = {
+      id: fromUserId,
+      name: fromUsername,
+      username: fromUsername,
+      avatar: fromAvatar
+    };
     this.pendingOffer = null;
 
     try {
       this.localStream = await this.acquireMicrophone();
     } catch (err) {
-      alert('Не удалось включить микрофон: ' + (err.message || err.name));
+      if (window.messengerApp && window.messengerApp.showDialog) {
+        window.messengerApp.showDialog('Не удалось включить микрофон: ' + (err.message || err.name));
+      } else {
+        alert('Не удалось включить микрофон: ' + (err.message || err.name));
+      }
       this.rejectIncomingCall();
       return;
     }
@@ -226,12 +272,13 @@ class CallManager {
       const answer = await this.peerConnection.createAnswer();
       await this.peerConnection.setLocalDescription(answer);
 
-      window.messengerApp.socket.emit('call-answer', {
-        targetUserId: fromUserId,
-        answer
-      });
-
-      this.startCallTimer();
+      if (window.messengerApp && window.messengerApp.socket) {
+        window.messengerApp.socket.emit('call-answer', {
+          targetUserId: fromUserId,
+          answer
+        });
+      }
+      // Note: Timer will start automatically when peerConnection connects!
     } catch (err) {
       console.error('Error answering call:', err);
       this.endCall(true);
@@ -240,6 +287,7 @@ class CallManager {
 
   // User presses Reject
   rejectIncomingCall() {
+    this.clearTimeouts();
     if (window.AndroidApp && window.AndroidApp.stopRinging) {
       window.AndroidApp.stopRinging();
     }
@@ -247,16 +295,20 @@ class CallManager {
     this.incomingDialog.classList.add('hidden');
 
     if (this.pendingOffer) {
-      window.messengerApp.socket.emit('call-reject', {
-        targetUserId: this.pendingOffer.fromUserId,
-        reason: 'Отклонён'
-      });
+      if (window.messengerApp && window.messengerApp.socket) {
+        window.messengerApp.socket.emit('call-reject', {
+          targetUserId: this.pendingOffer.fromUserId,
+          reason: 'Отклонён'
+        });
+      }
       this.pendingOffer = null;
     }
+    this.iceCandidatesQueue = [];
   }
 
   // Remote party answered our call
   async handleCallAnswered({ fromUserId, answer }) {
+    this.clearTimeouts();
     if (!this.peerConnection) return;
     if (fromUserId && this.currentCallTarget) {
       this.currentCallTarget.id = fromUserId;
@@ -264,7 +316,7 @@ class CallManager {
     try {
       await this.peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
       await this.drainIceCandidates();
-      this.startCallTimer();
+      // Note: Timer will start automatically when peerConnection connects!
     } catch (err) {
       console.error('Error setting remote answer:', err);
     }
@@ -272,6 +324,7 @@ class CallManager {
 
   // Remote party rejected or was busy
   handleCallRejected({ fromUserId, reason }) {
+    this.clearTimeouts();
     window.soundManager.stopRingtone();
     this.callStatusLabel.textContent = reason || 'Вызов завершён';
     setTimeout(() => {
@@ -312,10 +365,12 @@ class CallManager {
 
     this.peerConnection.onicecandidate = (event) => {
       if (event.candidate && this.currentCallTarget) {
-        window.messengerApp.socket.emit('ice-candidate', {
-          targetUserId: this.currentCallTarget.id,
-          candidate: event.candidate
-        });
+        if (window.messengerApp && window.messengerApp.socket) {
+          window.messengerApp.socket.emit('ice-candidate', {
+            targetUserId: this.currentCallTarget.id,
+            candidate: event.candidate
+          });
+        }
       }
     };
 
@@ -323,7 +378,6 @@ class CallManager {
     this.peerConnection.ontrack = (event) => {
       console.log('Received remote audio track:', event.track);
 
-      // Safe stream resolution: supports both event.streams and event.track
       let stream = null;
       if (event.streams && event.streams[0]) {
         stream = event.streams[0];
@@ -336,7 +390,6 @@ class CallManager {
         this.remoteAudio.srcObject = stream;
         this.unlockAndPlayAudio();
 
-        // Check if audio plays, if paused show button
         setTimeout(() => {
           if (this.remoteAudio.paused && this.btnUnmuteCall) {
             this.btnUnmuteCall.classList.remove('hidden');
@@ -352,8 +405,10 @@ class CallManager {
       console.log('WebRTC connection state:', state, 'ICE:', iceState);
 
       if (state === 'connected' || iceState === 'connected' || iceState === 'completed') {
-        this.callStatusLabel.textContent = 'Идёт разговор (Соединено)';
+        this.clearTimeouts();
+        this.callStatusLabel.textContent = 'Идёт разговор';
         this.unlockAndPlayAudio();
+        this.startCallTimer(); // Start timer strictly on connection established!
       } else if (iceState === 'checking') {
         this.callStatusLabel.textContent = 'Установка защищённого соединения...';
       } else if (state === 'failed' || iceState === 'failed') {
@@ -386,9 +441,9 @@ class CallManager {
 
   // Start in-call duration timer
   startCallTimer() {
+    if (this.callTimerInterval) return; // Already running
     this.callSeconds = 0;
     this.callTimer.textContent = '00:00';
-    if (this.callTimerInterval) clearInterval(this.callTimerInterval);
 
     this.callTimerInterval = setInterval(() => {
       this.callSeconds++;
@@ -421,6 +476,7 @@ class CallManager {
 
   // End call
   endCall(notifyPeer = true) {
+    this.clearTimeouts();
     if (window.AndroidApp && window.AndroidApp.stopRinging) {
       window.AndroidApp.stopRinging();
     }
@@ -433,10 +489,12 @@ class CallManager {
     }
 
     if (notifyPeer && this.currentCallTarget) {
-      window.messengerApp.socket.emit('call-end', {
-        targetUserId: this.currentCallTarget.id,
-        targetUsername: this.currentCallTarget.username || ''
-      });
+      if (window.messengerApp && window.messengerApp.socket) {
+        window.messengerApp.socket.emit('call-end', {
+          targetUserId: this.currentCallTarget.id,
+          targetUsername: this.currentCallTarget.username || ''
+        });
+      }
     }
 
     if (this.localStream) {

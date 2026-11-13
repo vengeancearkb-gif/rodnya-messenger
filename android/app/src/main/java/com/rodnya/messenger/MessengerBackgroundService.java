@@ -144,12 +144,12 @@ public class MessengerBackgroundService extends Service {
             SharedPreferences prefs = getSharedPreferences("RodnyaPrefs", Context.MODE_PRIVATE);
             String serverUrl = prefs.getString("serverUrl", "https://rodnya-messenger.onrender.com");
             String token = prefs.getString("token", "");
+            String deviceSecret = prefs.getString("deviceSecret", "");
             String roomId = prefs.getString("roomId", "semya");
             String username = prefs.getString("username", "android");
             String displayName = prefs.getString("displayName", "Android");
             String avatar = prefs.getString("avatar", "");
             String bio = prefs.getString("bio", "На связи");
-            String password = prefs.getString("password", "");
 
             if (socket != null) {
                 socket.disconnect();
@@ -170,6 +170,7 @@ public class MessengerBackgroundService extends Service {
                 try {
                     JSONObject joinData = new JSONObject();
                     joinData.put("token", token);
+                    joinData.put("deviceSecret", deviceSecret);
                     joinData.put("username", username);
                     joinData.put("displayName", displayName);
                     joinData.put("roomId", roomId);

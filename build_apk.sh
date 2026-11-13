@@ -8,16 +8,29 @@ echo "=========================================================="
 echo "      🔨 Сборка APK приложения мессенджера «Родня»"
 echo "=========================================================="
 
-export JAVA_HOME=${JAVA_HOME:-$HOME/.jdk21}
-export PATH=$JAVA_HOME/bin:$HOME/.gradle-dist/gradle-8.14.3/bin:$PATH
+# Setup Java & Android SDK paths with fallback
+if [ -z "$JAVA_HOME" ] && [ -d "$HOME/.jdk21" ]; then
+  export JAVA_HOME="$HOME/.jdk21"
+fi
+if [ -n "$JAVA_HOME" ]; then
+  export PATH="$JAVA_HOME/bin:$PATH"
+fi
+if [ -d "$HOME/.gradle-dist/gradle-8.14.3/bin" ]; then
+  export PATH="$HOME/.gradle-dist/gradle-8.14.3/bin:$PATH"
+fi
 export ANDROID_HOME=${ANDROID_HOME:-$HOME/.android-sdk}
 
-echo "1. Синхронизация веб-ресурсов..."
+echo "1. Синхронизация веб-ресурсов в Capacitor..."
 npx cap sync android
 
 echo "2. Компиляция APK..."
 cd android
-gradle assembleDebug
+if [ -f "./gradlew" ]; then
+  chmod +x ./gradlew
+  ./gradlew assembleDebug
+else
+  gradle assembleDebug
+fi
 
 APK_PATH="$DIR/android/app/build/outputs/apk/debug/app-debug.apk"
 OUT_DIR="$DIR/release"

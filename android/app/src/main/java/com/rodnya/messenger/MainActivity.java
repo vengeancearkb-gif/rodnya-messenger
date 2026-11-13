@@ -55,12 +55,13 @@ public class MainActivity extends BridgeActivity {
                 SharedPreferences.Editor editor = getSharedPreferences("RodnyaPrefs", Context.MODE_PRIVATE).edit();
                 if (obj.has("serverUrl")) editor.putString("serverUrl", obj.optString("serverUrl"));
                 if (obj.has("token")) editor.putString("token", obj.optString("token"));
+                if (obj.has("deviceSecret")) editor.putString("deviceSecret", obj.optString("deviceSecret"));
                 if (obj.has("roomId")) editor.putString("roomId", obj.optString("roomId"));
                 if (obj.has("username")) editor.putString("username", obj.optString("username"));
                 if (obj.has("displayName")) editor.putString("displayName", obj.optString("displayName"));
                 if (obj.has("avatar")) editor.putString("avatar", obj.optString("avatar"));
                 if (obj.has("bio")) editor.putString("bio", obj.optString("bio"));
-                if (obj.has("password")) editor.putString("password", obj.optString("password"));
+                editor.remove("password");
                 editor.apply();
 
                 if (MessengerBackgroundService.getInstance() != null) {
@@ -76,14 +77,23 @@ public class MainActivity extends BridgeActivity {
             try {
                 obj.put("serverUrl", prefs.getString("serverUrl", "https://rodnya-messenger.onrender.com"));
                 obj.put("token", prefs.getString("token", ""));
+                obj.put("deviceSecret", prefs.getString("deviceSecret", ""));
                 obj.put("roomId", prefs.getString("roomId", "semya"));
                 obj.put("username", prefs.getString("username", ""));
                 obj.put("displayName", prefs.getString("displayName", ""));
                 obj.put("avatar", prefs.getString("avatar", ""));
                 obj.put("bio", prefs.getString("bio", ""));
-                obj.put("password", prefs.getString("password", ""));
             } catch (Exception ignored) {}
             return obj.toString();
+        }
+
+        @JavascriptInterface
+        public void clearCredentials() {
+            SharedPreferences prefs = getSharedPreferences("RodnyaPrefs", Context.MODE_PRIVATE);
+            prefs.edit().clear().apply();
+            if (MessengerBackgroundService.getInstance() != null) {
+                MessengerBackgroundService.getInstance().initSocketConnection();
+            }
         }
 
         @JavascriptInterface

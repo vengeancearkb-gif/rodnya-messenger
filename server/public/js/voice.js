@@ -2,6 +2,7 @@
 class VoiceManager {
   constructor() {
     this.mediaRecorder = null;
+    this.mediaStream = null;
     this.audioChunks = [];
     this.recordingStartTime = 0;
     this.recordingTimerInterval = null;
@@ -26,7 +27,7 @@ class VoiceManager {
     if (this.isRecording) return;
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+      this.mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true
@@ -50,13 +51,31 @@ class VoiceManager {
       }
 
       const options = selectedMime ? { mimeType: selectedMime } : {};
-      this.mediaRecorder = new MediaRecorder(stream, options);
+      this.mediaRecorder = new MediaRecorder(this.mediaStream, options);
 
       this.mediaRecorder.ondataavailable = (e) => {
         if (e.data && e.data.size > 0) {
           this.audioChunks.push(e.data);
         }
       };
+
+      // Handle unexpected interruptions (e.g. GSM incoming call, device error)
+      this.mediaRecorder.onerror = (e) => {
+        console.warn('MediaRecorder error:', e);
+        this.cancelRecording();
+      };
+
+      // Listen to track ended event (mic unplugged or revoked by OS)
+      this.mediaStream.getAudioTracks().forEach(track => {
+        track.onended = () => {
+          if (this.isRecording) {
+            this.cancelRecording();
+            if (window.messengerApp && window.messengerApp.showDialog) {
+              window.messengerApp.showDialog('Запись прервана системой');
+            }
+          }
+        };
+      });
 
       this.mediaRecorder.start(100);
       this.isRecording = true;
@@ -73,12 +92,16 @@ class VoiceManager {
         this.recordingTimer.textContent = `${mins}:${secs}`;
       }, 1000);
     } catch (err) {
-      alert('Не удалось получить доступ к микрофону: ' + (err.message || err.name));
+      if (window.messengerApp && window.messengerApp.showDialog) {
+        window.messengerApp.showDialog('Не удалось получить доступ к микрофону: ' + (err.message || err.name));
+      } else {
+        alert('Не удалось получить доступ к микрофону: ' + (err.message || err.name));
+      }
     }
   }
 
   cancelRecording() {
-    if (!this.isRecording) return;
+    if (!this.isRecording && !this.mediaRecorder) return;
     this.isRecording = false;
 
     if (this.recordingTimerInterval) {
@@ -86,18 +109,23 @@ class VoiceManager {
       this.recordingTimerInterval = null;
     }
 
-    if (this.mediaRecorder) {
-      this.mediaRecorder.stream.getTracks().forEach(track => track.stop());
-      this.mediaRecorder.stop();
-      this.mediaRecorder = null;
+    if (this.mediaStream) {
+      this.mediaStream.getTracks().forEach(track => track.stop());
+      this.mediaStream = null;
     }
 
+    if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+      try {
+        this.mediaRecorder.stop();
+      } catch (e) {}
+    }
+    this.mediaRecorder = null;
     this.audioChunks = [];
     this.voiceBanner.classList.add('hidden');
   }
 
   async stopAndSendRecording() {
-    if (!this.isRecording) return;
+    if (!this.isRecording || !this.mediaRecorder) return;
     this.isRecording = false;
 
     const durationSeconds = Math.max(1, Math.round((Date.now() - this.recordingStartTime) / 1000));
@@ -110,45 +138,69 @@ class VoiceManager {
     this.voiceBanner.classList.add('hidden');
 
     return new Promise((resolve) => {
-      this.mediaRecorder.onstop = async () => {
+      const recorder = this.mediaRecorder;
+      const stream = this.mediaStream;
+
+      recorder.onstop = async () => {
         try {
-          const mime = this.mediaRecorder.mimeType || 'audio/webm';
+          if (stream) {
+            stream.getTracks().forEach(track => track.stop());
+          }
+
+          const mime = recorder.mimeType || 'audio/webm';
           const ext = mime.includes('ogg') ? '.ogg' : (mime.includes('mp4') ? '.mp4' : '.webm');
           const audioBlob = new Blob(this.audioChunks, { type: mime });
 
-          // Release mic tracks
-          this.mediaRecorder.stream.getTracks().forEach(track => track.stop());
-
-          // Upload audio to server
+          // Upload audio to server with authentication
           const formData = new FormData();
           formData.append('file', audioBlob, `voice_${Date.now()}${ext}`);
 
           const serverUrl = window.messengerApp.serverUrl || '';
+          const token = window.messengerApp.token || '';
           const response = await fetch(`${serverUrl}/api/upload`, {
             method: 'POST',
+            headers: token ? { 'Authorization': `Bearer ${token}` } : {},
             body: formData
           });
 
-          if (!response.ok) throw new Error('Upload failed');
+          if (!response.ok) {
+            const errData = await response.json().catch(() => ({}));
+            throw new Error(errData.error || 'Upload failed');
+          }
           const data = await response.json();
 
           // Send message via socket
-          window.messengerApp.socket.emit('send-message', {
-            type: 'voice',
-            fileUrl: data.url,
-            fileName: data.filename,
-            duration: durationSeconds
-          });
+          if (window.messengerApp.socket) {
+            window.messengerApp.socket.emit('send-message', {
+              type: 'voice',
+              fileUrl: data.url,
+              fileName: data.filename,
+              duration: durationSeconds
+            });
+          }
 
           resolve();
         } catch (err) {
           console.error('Failed to send voice message:', err);
-          alert('Ошибка отправки голосового сообщения');
+          if (window.messengerApp && window.messengerApp.showDialog) {
+            window.messengerApp.showDialog('Ошибка отправки голосового сообщения: ' + err.message);
+          } else {
+            alert('Ошибка отправки голосового сообщения: ' + err.message);
+          }
           resolve();
+        } finally {
+          this.mediaRecorder = null;
+          this.mediaStream = null;
+          this.audioChunks = [];
         }
       };
 
-      this.mediaRecorder.stop();
+      try {
+        recorder.stop();
+      } catch (e) {
+        this.cancelRecording();
+        resolve();
+      }
     });
   }
 

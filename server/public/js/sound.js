@@ -3,6 +3,7 @@ class SoundManager {
   constructor() {
     this.ctx = null;
     this.ringtoneInterval = null;
+    this.setupGestureUnlock();
   }
 
   init() {
@@ -13,8 +14,21 @@ class SoundManager {
       }
     }
     if (this.ctx && this.ctx.state === 'suspended') {
-      this.ctx.resume();
+      this.ctx.resume().catch(() => {});
     }
+  }
+
+  // Pre-unlock AudioContext on first user interaction so ringtone is never blocked
+  setupGestureUnlock() {
+    const unlock = () => {
+      this.init();
+      ['pointerdown', 'touchstart', 'click', 'keydown'].forEach(evt => {
+        window.removeEventListener(evt, unlock, true);
+      });
+    };
+    ['pointerdown', 'touchstart', 'click', 'keydown'].forEach(evt => {
+      window.addEventListener(evt, unlock, { once: true, capture: true, passive: true });
+    });
   }
 
   // Play incoming ringtone pattern (beep-beep pause beep-beep)
@@ -26,6 +40,9 @@ class SoundManager {
     const playDualTone = () => {
       try {
         if (!this.ctx) return;
+        if (this.ctx.state === 'suspended') {
+          this.ctx.resume().catch(() => {});
+        }
         const now = this.ctx.currentTime;
         const osc1 = this.ctx.createOscillator();
         const osc2 = this.ctx.createOscillator();
@@ -74,6 +91,9 @@ class SoundManager {
     this.init();
     if (!this.ctx) return;
     try {
+      if (this.ctx.state === 'suspended') {
+        this.ctx.resume().catch(() => {});
+      }
       const now = this.ctx.currentTime;
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
@@ -94,6 +114,9 @@ class SoundManager {
     this.init();
     if (!this.ctx) return;
     try {
+      if (this.ctx.state === 'suspended') {
+        this.ctx.resume().catch(() => {});
+      }
       const now = this.ctx.currentTime;
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();

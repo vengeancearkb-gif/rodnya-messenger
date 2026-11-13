@@ -3,12 +3,15 @@ class MessengerApp {
   constructor() {
     this.socket = null;
     this.token = localStorage.getItem('family_token') || null;
+    this.deviceSecret = localStorage.getItem('family_device_secret') || null;
     this.user = JSON.parse(localStorage.getItem('family_user') || 'null');
     this.roomId = localStorage.getItem('family_room') || 'semya';
     this.serverUrl = localStorage.getItem('family_server_url') || 'https://rodnya-messenger.onrender.com';
-    this.savedPassword = localStorage.getItem('family_password') || '';
     this.onlineMembers = [];
     this.pingInterval = null;
+    this.typingTimeout = null;
+    this.typingHideTimeout = null;
+    this.currentVoice = null; // { url, audio, buttonEl }
 
     // Temporary avatar upload state
     this.regAvatarUrl = null;
@@ -117,6 +120,83 @@ class MessengerApp {
     this.bindEvents();
   }
 
+  // Custom In-App Modal Dialog (eliminates https://localhost says:)
+  showDialog(message, title = 'Родня') {
+    return new Promise((resolve) => {
+      const modal = document.getElementById('dialog-modal');
+      const titleEl = document.getElementById('dialog-title');
+      const msgEl = document.getElementById('dialog-message');
+      const btnOk = document.getElementById('dialog-btn-ok');
+      const btnCancel = document.getElementById('dialog-btn-cancel');
+      const backdrop = document.getElementById('dialog-backdrop');
+
+      if (!modal) {
+        alert(message);
+        return resolve(true);
+      }
+
+      titleEl.textContent = title;
+      msgEl.textContent = message;
+      btnCancel.style.display = 'none';
+
+      const cleanup = () => {
+        modal.classList.add('hidden');
+        btnOk.removeEventListener('click', onOk);
+        backdrop.removeEventListener('click', onOk);
+      };
+
+      const onOk = () => {
+        cleanup();
+        resolve(true);
+      };
+
+      btnOk.addEventListener('click', onOk);
+      backdrop.addEventListener('click', onOk);
+      modal.classList.remove('hidden');
+    });
+  }
+
+  showConfirm(message, title = 'Родня') {
+    return new Promise((resolve) => {
+      const modal = document.getElementById('dialog-modal');
+      const titleEl = document.getElementById('dialog-title');
+      const msgEl = document.getElementById('dialog-message');
+      const btnOk = document.getElementById('dialog-btn-ok');
+      const btnCancel = document.getElementById('dialog-btn-cancel');
+      const backdrop = document.getElementById('dialog-backdrop');
+
+      if (!modal) {
+        return resolve(confirm(message));
+      }
+
+      titleEl.textContent = title;
+      msgEl.textContent = message;
+      btnCancel.style.display = 'inline-block';
+
+      const cleanup = () => {
+        modal.classList.add('hidden');
+        btnOk.removeEventListener('click', onOk);
+        btnCancel.removeEventListener('click', onCancel);
+        backdrop.removeEventListener('click', onCancel);
+      };
+
+      const onOk = () => {
+        cleanup();
+        resolve(true);
+      };
+
+      const onCancel = () => {
+        cleanup();
+        resolve(false);
+      };
+
+      btnOk.addEventListener('click', onOk);
+      btnCancel.addEventListener('click', onCancel);
+      backdrop.addEventListener('click', onCancel);
+      modal.classList.remove('hidden');
+    });
+  }
+
   bindEvents() {
     // Auth Tabs
     this.tabLoginBtn.addEventListener('click', () => this.switchAuthTab('login'));
@@ -150,6 +230,49 @@ class MessengerApp {
       this.messageInput.style.height = 'auto';
       this.messageInput.style.height = Math.min(this.messageInput.scrollHeight, 120) + 'px';
       this.notifyTyping();
+    });
+
+    // Event delegation on Chat Messages (safe, prevents unescaped onclick XSS)
+    this.chatMessages.addEventListener('click', (e) => {
+      const profileTarget = e.target.closest('[data-action="view-profile"]');
+      if (profileTarget) {
+        const username = profileTarget.dataset.username;
+        if (username) this.viewUserProfile(username);
+        return;
+      }
+
+      const imgTarget = e.target.closest('[data-action="open-image"]');
+      if (imgTarget) {
+        const url = imgTarget.dataset.url;
+        if (url) this.openImageModal(url);
+        return;
+      }
+
+      const voiceTarget = e.target.closest('[data-action="toggle-voice"]');
+      if (voiceTarget) {
+        const url = voiceTarget.dataset.url;
+        if (url) this.toggleVoicePlay(voiceTarget, url);
+        return;
+      }
+    });
+
+    // Event delegation on Members List
+    this.membersList.addEventListener('click', (e) => {
+      const callBtn = e.target.closest('[data-action="start-call"]');
+      if (callBtn) {
+        const id = callBtn.dataset.id;
+        const name = callBtn.dataset.name;
+        const username = callBtn.dataset.username;
+        window.callManager.startCall(id, name, username);
+        return;
+      }
+
+      const profileInfo = e.target.closest('[data-action="view-profile"]');
+      if (profileInfo) {
+        const username = profileInfo.dataset.username;
+        if (username) this.viewUserProfile(username);
+        return;
+      }
     });
 
     // Drawer
@@ -227,15 +350,15 @@ class MessengerApp {
               };
             }
             if (nativeData.token) this.token = nativeData.token;
+            if (nativeData.deviceSecret) this.deviceSecret = nativeData.deviceSecret;
             if (nativeData.roomId) this.roomId = nativeData.roomId;
             if (nativeData.serverUrl) this.serverUrl = nativeData.serverUrl;
-            if (nativeData.password) this.savedPassword = nativeData.password;
 
             localStorage.setItem('family_user', JSON.stringify(this.user));
             if (this.token) localStorage.setItem('family_token', this.token);
+            if (this.deviceSecret) localStorage.setItem('family_device_secret', this.deviceSecret);
             localStorage.setItem('family_room', this.roomId);
             localStorage.setItem('family_server_url', this.serverUrl);
-            if (this.savedPassword) localStorage.setItem('family_password', this.savedPassword);
           }
         }
       } catch (e) {
@@ -289,17 +412,17 @@ class MessengerApp {
 
       if (type === 'reg') {
         this.regAvatarUrl = dataUrl;
-        this.regAvatarPreview.innerHTML = `<img src="${dataUrl}" alt="Аватар">`;
+        this.regAvatarPreview.innerHTML = `<img src="${dataUrl}" alt="Аватар"><div class="avatar-badge-btn">📷</div>`;
       } else {
         this.editAvatarUrl = dataUrl;
-        this.editAvatarPreview.innerHTML = `<img src="${dataUrl}" alt="Аватар">`;
+        this.editAvatarPreview.innerHTML = `<img src="${dataUrl}" alt="Аватар"><div class="avatar-badge-btn">📷</div>`;
       }
     } catch (err) {
-      alert('Не удалось обработать фото: ' + err.message);
+      this.showDialog('Не удалось обработать фото: ' + err.message);
     }
   }
 
-  // Auto Login Check with Self-Healing Persistence
+  // Auto Login Check with Device Secret Persistence
   async checkAutoLogin() {
     if (this.user && this.user.username) {
       // 1. Try existing token
@@ -320,31 +443,34 @@ class MessengerApp {
         }
       }
 
-      // 2. Token invalid or server wiped (Render redeploy) -> Self-heal and restore session!
-      try {
-        const res = await fetch(`${this.serverUrl}/api/auth/restore-session`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            username: this.user.username,
-            password: this.savedPassword || '',
-            displayName: this.user.displayName || this.user.username,
-            avatar: this.user.avatar || null,
-            bio: this.user.bio || 'На связи',
-            roomId: this.roomId || 'semya'
-          })
-        });
+      // 2. Token invalid or expired -> Restore session using deviceSecret
+      if (this.deviceSecret) {
+        try {
+          const res = await fetch(`${this.serverUrl}/api/auth/restore-session`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              username: this.user.username,
+              deviceSecret: this.deviceSecret,
+              displayName: this.user.displayName || this.user.username,
+              avatar: this.user.avatar || null,
+              bio: this.user.bio || 'На связи',
+              roomId: this.roomId || 'semya'
+            })
+          });
 
-        if (res.ok) {
-          const data = await res.json();
-          this.token = data.token;
-          this.user = data.user;
-          this.saveAllCredentials();
-          this.enterMessenger();
-          return;
+          if (res.ok) {
+            const data = await res.json();
+            this.token = data.token;
+            if (data.deviceSecret) this.deviceSecret = data.deviceSecret;
+            this.user = data.user;
+            this.saveAllCredentials();
+            this.enterMessenger();
+            return;
+          }
+        } catch (e) {
+          console.warn('Session restoration failed:', e);
         }
-      } catch (e) {
-        console.warn('Session restoration failed:', e);
       }
     }
 
@@ -360,6 +486,11 @@ class MessengerApp {
     e.preventDefault();
     this.hideAlert();
 
+    const submitBtn = this.registerForm.querySelector('button[type="submit"]');
+    const origText = submitBtn.textContent;
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Создание...';
+
     const displayName = this.regDisplayName.value.trim();
     const username = this.regUsername.value.trim().toLowerCase();
     const password = this.regPassword.value;
@@ -369,6 +500,8 @@ class MessengerApp {
 
     if (!displayName || !username || !password) {
       this.showAlert('Заполните все обязательные поля');
+      submitBtn.disabled = false;
+      submitBtn.textContent = origText;
       return;
     }
 
@@ -391,12 +524,15 @@ class MessengerApp {
       }
 
       this.token = data.token;
+      this.deviceSecret = data.deviceSecret;
       this.user = data.user;
-      this.savedPassword = password;
       this.saveAllCredentials();
       this.enterMessenger();
     } catch (err) {
       this.showAlert(err.message);
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = origText;
     }
   }
 
@@ -405,6 +541,11 @@ class MessengerApp {
     e.preventDefault();
     this.hideAlert();
 
+    const submitBtn = this.loginForm.querySelector('button[type="submit"]');
+    const origText = submitBtn.textContent;
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Вход...';
+
     const username = this.loginUsername.value.trim().toLowerCase();
     const password = this.loginPassword.value;
     this.roomId = this.loginRoom.value.trim().toLowerCase() || 'semya';
@@ -412,6 +553,8 @@ class MessengerApp {
 
     if (!username || !password) {
       this.showAlert('Введите логин и пароль');
+      submitBtn.disabled = false;
+      submitBtn.textContent = origText;
       return;
     }
 
@@ -428,49 +571,41 @@ class MessengerApp {
       }
 
       this.token = data.token;
+      this.deviceSecret = data.deviceSecret;
       this.user = data.user;
-      this.savedPassword = password;
       this.saveAllCredentials();
       this.enterMessenger();
     } catch (err) {
       this.showAlert(err.message);
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = origText;
     }
   }
 
   saveAllCredentials() {
     if (this.token) localStorage.setItem('family_token', this.token);
+    if (this.deviceSecret) localStorage.setItem('family_device_secret', this.deviceSecret);
     if (this.user) localStorage.setItem('family_user', JSON.stringify(this.user));
     if (this.roomId) localStorage.setItem('family_room', this.roomId);
     if (this.serverUrl) localStorage.setItem('family_server_url', this.serverUrl);
-    if (this.savedPassword) localStorage.setItem('family_password', this.savedPassword);
+    localStorage.removeItem('family_password'); // Never store plaintext passwords!
 
-    if (window.AndroidApp) {
-      if (window.AndroidApp.saveProfile) {
-        try {
-          const profileData = {
-            serverUrl: this.serverUrl || 'https://rodnya-messenger.onrender.com',
-            token: this.token || '',
-            roomId: this.roomId || 'semya',
-            username: this.user ? this.user.username : '',
-            displayName: this.user ? (this.user.displayName || this.user.username) : '',
-            avatar: this.user ? (this.user.avatar || '') : '',
-            bio: this.user ? (this.user.bio || '') : '',
-            password: this.savedPassword || ''
-          };
-          window.AndroidApp.saveProfile(JSON.stringify(profileData));
-        } catch (e) {
-          console.error('Error saving profile to AndroidApp:', e);
-        }
-      } else if (window.AndroidApp.saveCredentials) {
-        try {
-          window.AndroidApp.saveCredentials(
-            this.serverUrl || 'https://rodnya-messenger.onrender.com',
-            this.token || '',
-            this.roomId || 'semya',
-            this.user ? this.user.username : '',
-            this.user ? (this.user.displayName || this.user.username) : ''
-          );
-        } catch (e) {}
+    if (window.AndroidApp && window.AndroidApp.saveProfile) {
+      try {
+        const profileData = {
+          serverUrl: this.serverUrl || 'https://rodnya-messenger.onrender.com',
+          token: this.token || '',
+          deviceSecret: this.deviceSecret || '',
+          roomId: this.roomId || 'semya',
+          username: this.user ? this.user.username : '',
+          displayName: this.user ? (this.user.displayName || this.user.username) : '',
+          avatar: this.user ? (this.user.avatar || '') : '',
+          bio: this.user ? (this.user.bio || '') : ''
+        };
+        window.AndroidApp.saveProfile(JSON.stringify(profileData));
+      } catch (e) {
+        console.error('Error saving profile to AndroidApp:', e);
       }
     }
   }
@@ -512,7 +647,7 @@ class MessengerApp {
       this.btnMyProfile.innerHTML = `<img src="${url}" alt="Аватар">`;
     } else {
       const letter = (this.user.displayName || this.user.username || 'Я').charAt(0).toUpperCase();
-      this.btnMyProfile.innerHTML = letter;
+      this.btnMyProfile.innerHTML = `<span id="header-avatar-letter">${letter}</span>`;
     }
   }
 
@@ -547,13 +682,26 @@ class MessengerApp {
       this.updateStatus('online', 'В сети');
       this.socket.emit('join-room', {
         token: this.token,
+        deviceSecret: this.deviceSecret,
         username: this.user ? this.user.username : 'Гость',
         displayName: this.user ? (this.user.displayName || this.user.username) : 'Гость',
         avatar: this.user ? this.user.avatar : null,
         bio: this.user ? this.user.bio : '',
-        password: this.savedPassword || '',
         roomId: this.roomId
       });
+    });
+
+    this.socket.on('session-token', ({ token }) => {
+      if (token) {
+        this.token = token;
+        localStorage.setItem('family_token', token);
+        this.saveAllCredentials();
+      }
+    });
+
+    this.socket.on('auth-error', async ({ message }) => {
+      await this.showDialog(message || 'Требуется повторный вход в систему');
+      this.logout(false);
     });
 
     this.socket.on('disconnect', () => {
@@ -602,9 +750,14 @@ class MessengerApp {
     });
 
     this.socket.on('user-typing', ({ username, isTyping }) => {
+      if (this.typingHideTimeout) clearTimeout(this.typingHideTimeout);
       if (isTyping) {
         this.typingIndicator.querySelector('.typing-text').textContent = `${username} печатает...`;
         this.typingIndicator.classList.remove('hidden');
+        // Auto-hide indicator after 3.5s in case user dropped connection
+        this.typingHideTimeout = setTimeout(() => {
+          this.typingIndicator.classList.add('hidden');
+        }, 3500);
       } else {
         this.typingIndicator.classList.add('hidden');
       }
@@ -616,8 +769,8 @@ class MessengerApp {
     this.socket.on('call-rejected', (data) => window.callManager.handleCallRejected(data));
     this.socket.on('call-ended', (data) => window.callManager.endCall(false));
     this.socket.on('ice-candidate', (data) => window.callManager.handleIceCandidate(data));
-    this.socket.on('call-busy', (data) => alert(data.message || 'Собеседник занят другим звонком'));
-    this.socket.on('call-error', (data) => alert(data.message || 'Ошибка соединения'));
+    this.socket.on('call-busy', (data) => this.showDialog(data.message || 'Собеседник занят другим звонком'));
+    this.socket.on('call-error', (data) => this.showDialog(data.message || 'Ошибка соединения'));
   }
 
   startPingMonitor() {
@@ -671,19 +824,32 @@ class MessengerApp {
     const file = e.target.files[0];
     if (!file) return;
 
+    // Client-side file size check (50MB)
+    if (file.size > 50 * 1024 * 1024) {
+      this.showDialog('Файл слишком большой. Максимальный размер 50 МБ.');
+      this.fileInput.value = '';
+      return;
+    }
+
     const isImage = file.type.startsWith('image/');
     const formData = new FormData();
     formData.append('file', file);
 
+    const tempNotice = document.createElement('div');
+    tempNotice.className = 'system-notice';
+    tempNotice.textContent = `Загрузка ${file.name}...`;
+    this.chatMessages.appendChild(tempNotice);
+    this.scrollToBottom();
+
     try {
-      this.renderSystemNotice(`Загрузка ${file.name}...`);
       const res = await fetch(`${this.serverUrl}/api/upload`, {
         method: 'POST',
+        headers: this.token ? { 'Authorization': `Bearer ${this.token}` } : {},
         body: formData
       });
 
-      if (!res.ok) throw new Error('Upload error');
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Ошибка загрузки файла');
 
       this.socket.emit('send-message', {
         type: isImage ? 'image' : 'file',
@@ -692,8 +858,11 @@ class MessengerApp {
         fileSize: this.formatBytes(file.size)
       });
     } catch (err) {
-      alert('Ошибка при отправке: ' + err.message);
+      this.showDialog('Ошибка при отправке: ' + err.message);
     } finally {
+      if (tempNotice.parentNode) {
+        tempNotice.remove();
+      }
       this.fileInput.value = '';
     }
   }
@@ -709,7 +878,7 @@ class MessengerApp {
       const avatarSrc = msg.senderAvatar ? this.getFullMediaUrl(msg.senderAvatar) : null;
       const initial = (msg.senderName || 'Р').charAt(0).toUpperCase();
       avatarHtml = `
-        <div class="message-avatar-circle" onclick="window.messengerApp.viewUserProfile('${this.escapeHtml(msg.senderUsername || '')}')" title="${this.escapeHtml(msg.senderName)}">
+        <div class="message-avatar-circle" data-action="view-profile" data-username="${this.escapeHtml(msg.senderUsername || '')}" title="${this.escapeHtml(msg.senderName)}">
           ${avatarSrc ? `<img src="${avatarSrc}" alt="Avatar">` : initial}
         </div>
       `;
@@ -720,7 +889,7 @@ class MessengerApp {
 
     let contentHtml = '';
     if (!isMine) {
-      contentHtml += `<div class="message-sender" onclick="window.messengerApp.viewUserProfile('${this.escapeHtml(msg.senderUsername || '')}')">${this.escapeHtml(msg.senderName)}</div>`;
+      contentHtml += `<div class="message-sender" data-action="view-profile" data-username="${this.escapeHtml(msg.senderUsername || '')}">${this.escapeHtml(msg.senderName)}</div>`;
     }
 
     const timeStr = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -729,13 +898,13 @@ class MessengerApp {
       contentHtml += `<div class="message-text">${this.formatText(msg.text)}</div>`;
     } else if (msg.type === 'image') {
       const fullUrl = this.getFullMediaUrl(msg.fileUrl);
-      contentHtml += `<img class="message-image" src="${fullUrl}" alt="Фото" onclick="window.messengerApp.openImageModal('${fullUrl}')" loading="lazy">`;
+      contentHtml += `<img class="message-image" src="${fullUrl}" alt="Фото" data-action="open-image" data-url="${fullUrl}" loading="lazy">`;
     } else if (msg.type === 'voice') {
       const fullUrl = this.getFullMediaUrl(msg.fileUrl);
       const durationStr = VoiceManager.formatTime(msg.duration || 0);
       contentHtml += `
         <div class="voice-player">
-          <button class="voice-play-btn" onclick="window.messengerApp.toggleVoicePlay(this, '${fullUrl}')">
+          <button class="voice-play-btn" data-action="toggle-voice" data-url="${fullUrl}">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
           </button>
           <div class="voice-wave">
@@ -778,31 +947,41 @@ class MessengerApp {
   }
 
   toggleVoicePlay(buttonEl, audioUrl) {
-    if (this.currentAudio && !this.currentAudio.paused) {
-      this.currentAudio.pause();
-      if (this.currentPlayBtn) {
-        this.currentPlayBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>';
+    if (this.currentVoice && this.currentVoice.url === audioUrl) {
+      if (this.currentVoice.audio.paused) {
+        this.currentVoice.audio.play().catch(() => {});
+        buttonEl.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>';
+      } else {
+        this.currentVoice.audio.pause();
+        buttonEl.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>';
       }
-      if (this.currentPlayBtn === buttonEl) {
-        this.currentAudio = null;
-        this.currentPlayBtn = null;
-        return;
+      return;
+    }
+
+    // New audio track: stop previous playing note
+    if (this.currentVoice) {
+      this.currentVoice.audio.pause();
+      if (this.currentVoice.buttonEl) {
+        this.currentVoice.buttonEl.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>';
       }
+      this.currentVoice = null;
     }
 
     const audio = new Audio(audioUrl);
-    this.currentAudio = audio;
-    this.currentPlayBtn = buttonEl;
+    this.currentVoice = { url: audioUrl, audio, buttonEl };
 
     buttonEl.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>';
 
     audio.onended = () => {
       buttonEl.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>';
-      this.currentAudio = null;
-      this.currentPlayBtn = null;
+      this.currentVoice = null;
     };
 
-    audio.play().catch(e => console.warn('Audio play error:', e));
+    audio.play().catch(e => {
+      console.warn('Audio play error:', e);
+      buttonEl.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>';
+      this.currentVoice = null;
+    });
   }
 
   renderSystemNotice(text) {
@@ -818,7 +997,7 @@ class MessengerApp {
     const otherUsers = users.filter(u => !this.user || u.username !== this.user.username);
 
     if (otherUsers.length === 0) {
-      this.membersList.innerHTML = '<p style="color: var(--text-muted); font-size: 13px; text-align: center; margin-top: 20px;">Пока никто из родных не подключился.<br>Поделитесь кодом комнаты: <b>' + this.roomId + '</b></p>';
+      this.membersList.innerHTML = '<p style="color: var(--text-muted); font-size: 13px; text-align: center; margin-top: 20px;">Пока никто из родных не подключился.<br>Поделитесь кодом комнаты: <b>' + this.escapeHtml(this.roomId) + '</b></p>';
       return;
     }
 
@@ -830,7 +1009,7 @@ class MessengerApp {
       const initial = (user.displayName || user.username || 'Р').charAt(0).toUpperCase();
 
       item.innerHTML = `
-        <div class="member-info" onclick="window.messengerApp.viewUserProfile('${this.escapeHtml(user.username)}')">
+        <div class="member-info" data-action="view-profile" data-username="${this.escapeHtml(user.username)}">
           <div class="member-avatar">
             ${avatarSrc ? `<img src="${avatarSrc}" alt="Avatar">` : initial}
           </div>
@@ -841,7 +1020,7 @@ class MessengerApp {
             </span>
           </div>
         </div>
-        <button class="member-call-btn" onclick="window.callManager.startCall('${user.id}', '${this.escapeHtml(user.displayName || user.username)}', '${this.escapeHtml(user.username)}')">
+        <button class="member-call-btn" data-action="start-call" data-id="${this.escapeHtml(user.id)}" data-name="${this.escapeHtml(user.displayName || user.username)}" data-username="${this.escapeHtml(user.username)}">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
           Звонок
         </button>
@@ -853,7 +1032,7 @@ class MessengerApp {
   handleQuickCall() {
     const available = this.onlineMembers.find(u => (!this.user || u.username !== this.user.username) && !u.inCall);
     if (!available) {
-      alert('Никого из родственников сейчас нет в сети или все заняты разговором.');
+      this.showDialog('Никого из родственников сейчас нет в сети или все заняты разговором.');
       return;
     }
     window.callManager.startCall(available.id, available.displayName || available.username, available.username);
@@ -918,9 +1097,9 @@ class MessengerApp {
       this.syncNativeCredentials();
       this.updateHeaderAvatar();
       this.closeMyProfile();
-      alert('Профиль успешно обновлен!');
+      this.showDialog('Профиль успешно обновлен!');
     } catch (err) {
-      alert(err.message);
+      this.showDialog(err.message);
     }
   }
 
@@ -955,7 +1134,7 @@ class MessengerApp {
         if (onlineUser) {
           window.callManager.startCall(onlineUser.id, u.displayName || u.username, u.username);
         } else {
-          alert('Родственник сейчас не в сети для звонка');
+          this.showDialog('Родственник сейчас не в сети для звонка');
         }
       };
 
@@ -966,7 +1145,7 @@ class MessengerApp {
 
       this.userProfileModal.classList.remove('hidden');
     } catch (err) {
-      alert('Не удалось открыть профиль: ' + err.message);
+      this.showDialog('Не удалось открыть профиль: ' + err.message);
     }
   }
 
@@ -991,17 +1170,42 @@ class MessengerApp {
 
     localStorage.setItem('family_server_url', this.serverUrl);
     localStorage.setItem('family_room', this.roomId);
+    this.roomTitle.textContent = `Комната: ${this.roomId.toUpperCase()}`;
 
+    this.syncNativeCredentials();
     this.closeSettings();
     this.connect();
   }
 
-  logout() {
-    if (confirm('Вы уверены, что хотите выйти из аккаунта на этом устройстве? Вы сможете войти снова в любой момент!')) {
-      localStorage.removeItem('family_token');
-      localStorage.removeItem('family_user');
-      location.reload();
+  async logout(askConfirmation = true) {
+    if (askConfirmation) {
+      const confirmed = await this.showConfirm('Вы уверены, что хотите выйти из аккаунта на этом устройстве? Вы сможете войти снова в любой момент!');
+      if (!confirmed) return;
     }
+
+    localStorage.removeItem('family_token');
+    localStorage.removeItem('family_device_secret');
+    localStorage.removeItem('family_user');
+    localStorage.removeItem('family_password');
+
+    this.token = null;
+    this.deviceSecret = null;
+    this.user = null;
+
+    if (window.AndroidApp && window.AndroidApp.clearCredentials) {
+      try {
+        window.AndroidApp.clearCredentials();
+      } catch (e) {}
+    }
+
+    if (this.socket) {
+      this.socket.disconnect();
+      this.socket = null;
+    }
+
+    this.appScreen.classList.remove('active');
+    this.loginScreen.classList.add('active');
+    this.switchAuthTab('login');
   }
 
   openImageModal(url) {

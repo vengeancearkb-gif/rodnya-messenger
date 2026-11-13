@@ -1,11 +1,14 @@
 {
-  "name": "family-messenger-server",
+  "name": "rodnya-messenger-server",
   "version": "1.0.0",
   "description": "Fast and lightweight messenger server with WebSocket, Voice, Files and WebRTC Calling",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
   },
   "dependencies": {
     "cors": "^2.8.5",

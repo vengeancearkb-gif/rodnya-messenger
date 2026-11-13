@@ -28,8 +28,12 @@ if (!fs.existsSync(dataDir)) {
 const USERS_FILE = path.join(dataDir, 'users.json');
 const MESSAGES_FILE = path.join(dataDir, 'messages.json');
 
-// Serve uploaded files
-app.use('/uploads', express.static(uploadsDir));
+// Serve uploaded files with strict security headers (prevent Stored XSS)
+app.use('/uploads', (req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Security-Policy', "default-src 'none'; media-src 'self'; img-src 'self' data:;");
+  next();
+}, express.static(uploadsDir));
 
 // Serve client static files
 const publicDir = path.join(__dirname, 'public');
@@ -37,9 +41,19 @@ const clientDir = path.join(__dirname, '..', 'client');
 
 if (fs.existsSync(publicDir)) {
   app.use(express.static(publicDir));
-} else if (fs.existsSync(clientDir)) {
+}
+if (fs.existsSync(clientDir)) {
   app.use(express.static(clientDir));
 }
+
+// Guaranteed root and SPA route fallback so "Cannot GET /" NEVER happens!
+app.get('/', (req, res) => {
+  const publicIndex = path.join(publicDir, 'index.html');
+  const clientIndex = path.join(clientDir, 'index.html');
+  if (fs.existsSync(publicIndex)) return res.sendFile(publicIndex);
+  if (fs.existsSync(clientIndex)) return res.sendFile(clientIndex);
+  res.status(404).send('Messenger client not found');
+});
 
 // ================= Persistent Storage Helpers =================
 function loadJson(file, defaultValue) {
@@ -69,6 +83,10 @@ const usersMap = new Map(); // username (lowercase) -> user object
 const tokensMap = new Map(); // token -> username
 const rawUsers = loadJson(USERS_FILE, []);
 rawUsers.forEach(u => {
+  // Ensure data structure compatibility
+  if (!Array.isArray(u.deviceSecrets)) {
+    u.deviceSecrets = [];
+  }
   usersMap.set(u.username.toLowerCase(), u);
   if (u.token) {
     tokensMap.set(u.token, u.username.toLowerCase());
@@ -85,20 +103,88 @@ for (const [roomId, msgs] of Object.entries(rawMessages)) {
   roomHistory.set(roomId, msgs);
 }
 
+// Debounced message persistence (prevents disk thrashing and event loop blocking)
+let persistMessagesTimer = null;
 function persistMessages() {
-  const obj = {};
-  for (const [roomId, msgs] of roomHistory.entries()) {
-    obj[roomId] = msgs.slice(-300); // keep last 300
-  }
-  saveJson(MESSAGES_FILE, obj);
+  if (persistMessagesTimer) return;
+  persistMessagesTimer = setTimeout(() => {
+    persistMessagesTimer = null;
+    const obj = {};
+    for (const [roomId, msgs] of roomHistory.entries()) {
+      obj[roomId] = msgs.slice(-300); // keep last 300
+    }
+    saveJson(MESSAGES_FILE, obj);
+  }, 1000);
 }
 
+// Clean up orphaned tokens periodically
+function pruneTokens() {
+  const validUsers = new Set(Array.from(usersMap.keys()));
+  for (const [token, username] of tokensMap.entries()) {
+    if (!validUsers.has(username)) {
+      tokensMap.delete(token);
+    }
+  }
+}
+setInterval(pruneTokens, 3600000);
+
 // ================= Password & Auth Helpers =================
-function hashPassword(password, salt) {
-  return crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
+function hashPasswordAsync(password, salt, iterations = 100000) {
+  return new Promise((resolve, reject) => {
+    crypto.pbkdf2(password, salt, iterations, 64, 'sha512', (err, derivedKey) => {
+      if (err) return reject(err);
+      resolve(derivedKey.toString('hex'));
+    });
+  });
+}
+
+function hashSecret(secret) {
+  return crypto.createHash('sha256').update(secret).digest('hex');
+}
+
+async function verifyPassword(password, user) {
+  if (!password || !user || !user.passwordHash || !user.salt) return false;
+  const iterations = user.hashIterations || 1000; // backward-compat with legacy 1,000 hashes
+  const candidate = await hashPasswordAsync(password, user.salt, iterations);
+  const bufCandidate = Buffer.from(candidate, 'hex');
+  const bufExpected = Buffer.from(user.passwordHash, 'hex');
+  if (bufCandidate.length !== bufExpected.length) return false;
+  const isMatch = crypto.timingSafeEqual(bufCandidate, bufExpected);
+
+  // Upgrade legacy hash to 100,000 iterations automatically upon successful login
+  if (isMatch && iterations < 100000) {
+    user.hashIterations = 100000;
+    user.passwordHash = await hashPasswordAsync(password, user.salt, 100000);
+    persistUsers();
+  }
+  return isMatch;
+}
+
+function verifyDeviceSecret(secret, user) {
+  if (!secret || !user || !Array.isArray(user.deviceSecrets)) return false;
+  const hashed = hashSecret(secret);
+  return user.deviceSecrets.includes(hashed);
+}
+
+function addDeviceSecret(user, secret) {
+  if (!user || !secret) return;
+  if (!Array.isArray(user.deviceSecrets)) {
+    user.deviceSecrets = [];
+  }
+  const hashed = hashSecret(secret);
+  if (!user.deviceSecrets.includes(hashed)) {
+    user.deviceSecrets.push(hashed);
+    if (user.deviceSecrets.length > 10) {
+      user.deviceSecrets.shift(); // keep max 10 devices
+    }
+  }
 }
 
 function generateToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function generateDeviceSecret() {
   return crypto.randomBytes(32).toString('hex');
 }
 
@@ -111,44 +197,84 @@ function getUserByToken(token) {
 
 function sanitizeUser(u) {
   if (!u) return null;
-  const { salt, passwordHash, ...clean } = u;
+  const { salt, passwordHash, hashIterations, deviceSecrets, ...clean } = u;
   return clean;
 }
 
-// ================= Configure Multer for Uploads =================
+// ================= Multer File Upload Configuration =================
+const ALLOWED_EXTENSIONS = new Set([
+  // Images
+  '.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp',
+  // Audio
+  '.mp3', '.ogg', '.wav', '.webm', '.m4a', '.aac', '.flac',
+  // Documents & Archives
+  '.pdf', '.txt', '.doc', '.docx', '.xls', '.xlsx', '.zip', '.tar', '.gz'
+]);
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadsDir),
   filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname) || '';
-    const safeName = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}${ext}`;
+    let ext = (path.extname(file.originalname) || '').toLowerCase();
+    if (!ALLOWED_EXTENSIONS.has(ext)) {
+      ext = '.bin';
+    }
+    const safeName = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}${ext}`;
     cb(null, safeName);
   }
 });
 
 const upload = multer({
   storage,
-  limits: { fileSize: 50 * 1024 * 1024 } // 50MB
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
+  fileFilter: (req, file, cb) => {
+    const ext = (path.extname(file.originalname) || '').toLowerCase();
+    const blocked = ['.html', '.htm', '.svg', '.xml', '.js', '.mjs', '.php', '.sh', '.exe', '.bat'];
+    if (blocked.includes(ext)) {
+      return cb(new Error('Загрузка HTML, SVG и исполняемых скриптов запрещена'));
+    }
+    cb(null, true);
+  }
 });
 
-// Upload endpoint (for files, voice recordings and profile avatars)
-app.post('/api/upload', upload.single('file'), (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: 'No file uploaded' });
+// Middleware: Require Bearer authentication for uploads
+function requireAuth(req, res, next) {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.replace(/^Bearer\s+/i, '') || req.query.token;
+  const user = getUserByToken(token);
+  if (!user) {
+    return res.status(401).json({ error: 'Необходима авторизация для загрузки файлов' });
   }
+  req.user = user;
+  next();
+}
 
-  const fileUrl = `/uploads/${req.file.filename}`;
-  res.json({
-    url: fileUrl,
-    filename: req.file.originalname,
-    size: req.file.size,
-    mimetype: req.file.mimetype
+// Upload endpoint with JSON error handler
+app.post('/api/upload', requireAuth, (req, res) => {
+  upload.single('file')(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: 'Файл слишком большой. Максимальный размер 50 МБ.' });
+      }
+      return res.status(400).json({ error: err.message || 'Ошибка загрузки файла' });
+    }
+    if (!req.file) {
+      return res.status(400).json({ error: 'Файл не был выбран' });
+    }
+
+    const fileUrl = `/uploads/${req.file.filename}`;
+    res.json({
+      url: fileUrl,
+      filename: req.file.originalname,
+      size: req.file.size,
+      mimetype: req.file.mimetype
+    });
   });
 });
 
 // ================= Authentication & Profile REST API =================
 
 // Register a new profile
-app.post('/api/auth/register', (req, res) => {
+app.post('/api/auth/register', async (req, res) => {
   let { username, password, displayName, avatar, bio } = req.body;
 
   if (!username || !password) {
@@ -162,13 +288,19 @@ app.post('/api/auth/register', (req, res) => {
     return res.status(400).json({ error: 'Логин должен содержать от 2 до 30 символов' });
   }
 
+  if (password.length < 3) {
+    return res.status(400).json({ error: 'Пароль должен содержать не менее 3 символов' });
+  }
+
   if (usersMap.has(cleanUsername)) {
     const existingUser = usersMap.get(cleanUsername);
-    if (existingUser && password && existingUser.passwordHash) {
-      const checkHash = hashPassword(password, existingUser.salt);
-      if (checkHash === existingUser.passwordHash) {
+    if (existingUser && existingUser.passwordHash) {
+      const match = await verifyPassword(password, existingUser);
+      if (match) {
         const token = generateToken();
+        const deviceSecret = generateDeviceSecret();
         existingUser.token = token;
+        addDeviceSecret(existingUser, deviceSecret);
         if (displayName && displayName.trim()) existingUser.displayName = displayName.trim();
         if (avatar) existingUser.avatar = avatar;
         if (bio && bio.trim()) existingUser.bio = bio.trim();
@@ -178,6 +310,7 @@ app.post('/api/auth/register', (req, res) => {
         return res.json({
           ok: true,
           token,
+          deviceSecret,
           user: sanitizeUser(existingUser)
         });
       }
@@ -186,8 +319,9 @@ app.post('/api/auth/register', (req, res) => {
   }
 
   const salt = crypto.randomBytes(16).toString('hex');
-  const passwordHash = hashPassword(password, salt);
+  const passwordHash = await hashPasswordAsync(password, salt, 100000);
   const token = generateToken();
+  const deviceSecret = generateDeviceSecret();
 
   const newUser = {
     id: `u_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -197,6 +331,8 @@ app.post('/api/auth/register', (req, res) => {
     bio: (bio && bio.trim()) ? bio.trim() : 'На связи',
     salt,
     passwordHash,
+    hashIterations: 100000,
+    deviceSecrets: [hashSecret(deviceSecret)],
     token,
     createdAt: new Date().toISOString(),
     lastSeen: new Date().toISOString()
@@ -209,12 +345,13 @@ app.post('/api/auth/register', (req, res) => {
   res.json({
     ok: true,
     token,
+    deviceSecret,
     user: sanitizeUser(newUser)
   });
 });
 
 // Login to existing profile
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   let { username, password } = req.body;
 
   if (!username || !password) {
@@ -228,14 +365,16 @@ app.post('/api/auth/login', (req, res) => {
     return res.status(400).json({ error: 'Пользователь с таким логином не найден' });
   }
 
-  const checkHash = hashPassword(password, user.salt);
-  if (checkHash !== user.passwordHash) {
+  const match = await verifyPassword(password, user);
+  if (!match) {
     return res.status(400).json({ error: 'Неверный пароль или PIN-код' });
   }
 
-  // Generate new token
+  // Issue new token and deviceSecret
   const token = generateToken();
+  const deviceSecret = generateDeviceSecret();
   user.token = token;
+  addDeviceSecret(user, deviceSecret);
   user.lastSeen = new Date().toISOString();
   tokensMap.set(token, cleanUsername);
   persistUsers();
@@ -243,6 +382,7 @@ app.post('/api/auth/login', (req, res) => {
   res.json({
     ok: true,
     token,
+    deviceSecret,
     user: sanitizeUser(user)
   });
 });
@@ -261,8 +401,8 @@ app.get('/api/auth/me', (req, res) => {
 });
 
 // Restore or self-heal user session from client storage
-app.post('/api/auth/restore-session', (req, res) => {
-  let { username, password, displayName, avatar, bio, roomId } = req.body;
+app.post('/api/auth/restore-session', async (req, res) => {
+  let { username, password, deviceSecret, displayName, avatar, bio } = req.body;
   if (!username) {
     return res.status(400).json({ error: 'Логин обязателен' });
   }
@@ -271,21 +411,26 @@ app.post('/api/auth/restore-session', (req, res) => {
   let user = usersMap.get(cleanUsername);
 
   if (user) {
-    // If password is set on user record, verify it
-    if (password && user.passwordHash) {
-      const checkHash = hashPassword(password, user.salt);
-      if (checkHash !== user.passwordHash) {
-        return res.status(401).json({ error: 'Неверный пароль' });
-      }
+    // STRICT AUTH CHECK: Must verify deviceSecret OR valid password. NEVER allow empty bypass!
+    const validSecret = deviceSecret && verifyDeviceSecret(deviceSecret, user);
+    const validPassword = password && (await verifyPassword(password, user));
+
+    if (!validSecret && !validPassword) {
+      return res.status(401).json({ error: 'Сессия истекла или неверный пароль. Войдите снова.' });
     }
+
     if (displayName && displayName.trim()) user.displayName = displayName.trim();
     if (avatar) user.avatar = avatar;
     if (bio && bio.trim()) user.bio = bio.trim();
     user.lastSeen = new Date().toISOString();
   } else {
     // Recreate user on server (self-healing after Render container reset)
+    // Strictly requires password to prevent taking over arbitrary usernames!
+    if (!password || password.length < 3) {
+      return res.status(401).json({ error: 'Сессия истекла. Войдите с паролем для восстановления.' });
+    }
     const salt = crypto.randomBytes(16).toString('hex');
-    const passwordHash = password ? hashPassword(password, salt) : '';
+    const passwordHash = await hashPasswordAsync(password, salt, 100000);
     user = {
       id: `u_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       username: cleanUsername,
@@ -294,6 +439,8 @@ app.post('/api/auth/restore-session', (req, res) => {
       bio: (bio && bio.trim()) ? bio.trim() : 'На связи',
       salt,
       passwordHash,
+      hashIterations: 100000,
+      deviceSecrets: [],
       createdAt: new Date().toISOString(),
       lastSeen: new Date().toISOString()
     };
@@ -303,11 +450,19 @@ app.post('/api/auth/restore-session', (req, res) => {
   const token = generateToken();
   user.token = token;
   tokensMap.set(token, cleanUsername);
+
+  let returnDeviceSecret = deviceSecret;
+  if (!returnDeviceSecret || !verifyDeviceSecret(returnDeviceSecret, user)) {
+    returnDeviceSecret = generateDeviceSecret();
+    addDeviceSecret(user, returnDeviceSecret);
+  }
+
   persistUsers();
 
   res.json({
     ok: true,
     token,
+    deviceSecret: returnDeviceSecret,
     user: sanitizeUser(user)
   });
 });
@@ -411,13 +566,16 @@ const io = new Server(server, {
     origin: '*',
     methods: ['GET', 'POST']
   },
-  pingInterval: 10000,
-  pingTimeout: 5000,
+  pingInterval: 25000,
+  pingTimeout: 20000, // Mobile-friendly timeout to prevent disconnects on 3G/4G
   maxHttpBufferSize: 1e7
 });
 
-// Online users map: socket.id -> { socketId, username, displayName, avatar, bio, roomId, inCall }
+// Online users map: socket.id -> { socketId, username, displayName, avatar, bio, roomId, inCall, isNativeBackground }
 const onlineUsers = new Map();
+
+// Active call pairs: socket.id -> { peerSocketId, roomId }
+const activeCallPairs = new Map();
 
 function getRoomHistory(roomId) {
   if (!roomHistory.has(roomId)) {
@@ -427,12 +585,12 @@ function getRoomHistory(roomId) {
 }
 
 function getRoomUsers(roomId) {
-  const usersMap = new Map();
+  const usersMapResult = new Map();
   for (const [id, user] of onlineUsers.entries()) {
     if (user.roomId === roomId) {
-      const existing = usersMap.get(user.username.toLowerCase());
+      const existing = usersMapResult.get(user.username.toLowerCase());
       if (!existing) {
-        usersMap.set(user.username.toLowerCase(), {
+        usersMapResult.set(user.username.toLowerCase(), {
           id: user.socketId,
           username: user.username,
           displayName: user.displayName || user.username,
@@ -443,7 +601,7 @@ function getRoomUsers(roomId) {
         });
       } else {
         if (user.inCall) existing.inCall = true;
-        // Prefer foreground / web session for direct call target ID
+        // Prefer foreground interactive session for direct call target ID
         if (!user.isNativeBackground && existing.isNativeBackground) {
           existing.id = user.socketId;
           existing.isNativeBackground = false;
@@ -451,52 +609,38 @@ function getRoomUsers(roomId) {
       }
     }
   }
-  return Array.from(usersMap.values());
+  return Array.from(usersMapResult.values());
 }
 
 io.on('connection', (socket) => {
   let currentUser = null;
 
   // User joins a room / family space
-  socket.on('join-room', ({ token, username, displayName, avatar, bio, password, roomId, isNativeBackground }) => {
+  socket.on('join-room', async ({ token, deviceSecret, username, displayName, avatar, bio, roomId, isNativeBackground }) => {
     const cleanRoomId = (roomId || 'semya').trim().toLowerCase();
 
-    // Check if authenticated user by token
+    // 1. Authenticate user by token
     let dbUser = getUserByToken(token);
 
-    // If token wasn't found (server restarted or client reconnecting), search by username
-    if (!dbUser && username && username !== 'Гость' && username !== 'android') {
+    // 2. If token expired, verify with deviceSecret
+    if (!dbUser && username && deviceSecret) {
       const cleanUsername = username.trim().toLowerCase();
-      dbUser = usersMap.get(cleanUsername);
+      const candidate = usersMap.get(cleanUsername);
+      if (candidate && verifyDeviceSecret(deviceSecret, candidate)) {
+        dbUser = candidate;
+        const newToken = generateToken();
+        dbUser.token = newToken;
+        tokensMap.set(newToken, cleanUsername);
+        socket.emit('session-token', { token: newToken });
+      }
+    }
 
-      if (!dbUser) {
-        // Self-heal: recreate user record on the server so room immediately has this user!
-        const salt = crypto.randomBytes(16).toString('hex');
-        const tokenToSave = token || generateToken();
-        const passwordHash = password ? hashPassword(password, salt) : '';
-        dbUser = {
-          id: `u_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-          username: cleanUsername,
-          displayName: (displayName && displayName.trim()) ? displayName.trim() : cleanUsername,
-          avatar: avatar || null,
-          bio: (bio && bio.trim()) ? bio.trim() : 'На связи',
-          salt,
-          passwordHash,
-          token: tokenToSave,
-          createdAt: new Date().toISOString(),
-          lastSeen: new Date().toISOString()
-        };
-        usersMap.set(cleanUsername, dbUser);
-        tokensMap.set(tokenToSave, cleanUsername);
-        persistUsers();
-      } else {
-        if (displayName && displayName.trim()) dbUser.displayName = displayName.trim();
-        if (avatar) dbUser.avatar = avatar;
-        if (bio && bio.trim()) dbUser.bio = bio.trim();
-        if (token) {
-          dbUser.token = token;
-          tokensMap.set(token, cleanUsername);
-        }
+    // 3. Prevent unauthorized users from claiming registered usernames!
+    if (!dbUser && username) {
+      const cleanUsername = username.trim().toLowerCase();
+      if (usersMap.has(cleanUsername)) {
+        socket.emit('auth-error', { message: 'Требуется авторизация для этого профиля' });
+        return;
       }
     }
 
@@ -587,12 +731,12 @@ io.on('connection', (socket) => {
   socket.on('call-user', ({ targetUserId, targetUsername, offer }) => {
     if (!currentUser) return;
 
-    // Find all sockets for target user
+    // Filter target sockets: MUST be in the same room!
     let targetSockets = [];
     if (targetUsername && targetUsername.trim() !== '') {
       const cleanTarget = targetUsername.trim().toLowerCase();
       for (const [sId, u] of onlineUsers.entries()) {
-        if (u.username.toLowerCase() === cleanTarget && sId !== socket.id) {
+        if (u.username.toLowerCase() === cleanTarget && sId !== socket.id && u.roomId === currentUser.roomId) {
           targetSockets.push({ socketId: sId, user: u });
         }
       }
@@ -600,9 +744,9 @@ io.on('connection', (socket) => {
 
     if (targetSockets.length === 0 && targetUserId) {
       const directTarget = onlineUsers.get(targetUserId);
-      if (directTarget) {
+      if (directTarget && directTarget.roomId === currentUser.roomId) {
         for (const [sId, u] of onlineUsers.entries()) {
-          if (u.username.toLowerCase() === directTarget.username.toLowerCase() && sId !== socket.id) {
+          if (u.username.toLowerCase() === directTarget.username.toLowerCase() && sId !== socket.id && u.roomId === currentUser.roomId) {
             targetSockets.push({ socketId: sId, user: u });
           }
         }
@@ -610,7 +754,13 @@ io.on('connection', (socket) => {
     }
 
     if (targetSockets.length === 0) {
-      return socket.emit('call-error', { message: 'Собеседник не в сети' });
+      return socket.emit('call-error', { message: 'Собеседник не найден или не в сети в этой комнате' });
+    }
+
+    // Check if target is already in another call
+    const isTargetBusy = targetSockets.some(t => t.user.inCall);
+    if (isTargetBusy) {
+      return socket.emit('call-busy', { message: 'Собеседник сейчас разговаривает' });
     }
 
     currentUser.inCall = true;
@@ -634,6 +784,11 @@ io.on('connection', (socket) => {
   socket.on('call-answer', ({ targetUserId, answer }) => {
     if (!currentUser) return;
     currentUser.inCall = true;
+
+    // Track active call pair
+    activeCallPairs.set(socket.id, { peerSocketId: targetUserId, roomId: currentUser.roomId });
+    activeCallPairs.set(targetUserId, { peerSocketId: socket.id, roomId: currentUser.roomId });
+
     io.to(currentUser.roomId).emit('users-update', getRoomUsers(currentUser.roomId));
 
     io.to(targetUserId).emit('call-answered', {
@@ -650,7 +805,12 @@ io.on('connection', (socket) => {
           u.inCall = false;
         }
       }
+      activeCallPairs.delete(socket.id);
       io.to(currentUser.roomId).emit('users-update', getRoomUsers(currentUser.roomId));
+    }
+
+    if (targetUserId) {
+      activeCallPairs.delete(targetUserId);
     }
 
     const directTarget = onlineUsers.get(targetUserId);
@@ -681,7 +841,12 @@ io.on('connection', (socket) => {
           u.inCall = false;
         }
       }
+      activeCallPairs.delete(socket.id);
       io.to(currentUser.roomId).emit('users-update', getRoomUsers(currentUser.roomId));
+    }
+
+    if (targetUserId) {
+      activeCallPairs.delete(targetUserId);
     }
 
     let targetSockets = [];
@@ -709,6 +874,7 @@ io.on('connection', (socket) => {
 
     for (const t of targetSockets) {
       t.user.inCall = false;
+      activeCallPairs.delete(t.socketId);
       io.to(t.socketId).emit('call-ended', { fromUserId: socket.id });
     }
     if (targetSockets.length > 0) {
@@ -724,6 +890,19 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
+    // If user was in an active call, notify the other peer immediately!
+    if (activeCallPairs.has(socket.id)) {
+      const pair = activeCallPairs.get(socket.id);
+      activeCallPairs.delete(socket.id);
+      activeCallPairs.delete(pair.peerSocketId);
+
+      const peerUser = onlineUsers.get(pair.peerSocketId);
+      if (peerUser) {
+        peerUser.inCall = false;
+      }
+      io.to(pair.peerSocketId).emit('call-ended', { fromUserId: socket.id, reason: 'Собеседник отключился' });
+    }
+
     if (currentUser) {
       onlineUsers.delete(socket.id);
       io.to(currentUser.roomId).emit('users-update', getRoomUsers(currentUser.roomId));

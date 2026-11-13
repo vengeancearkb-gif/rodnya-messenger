@@ -4,7 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Родня — Семейный Мессенджер</title>
-  <meta name="theme-color" content="#18181b">
+  <meta name="theme-color" content="#1e293b">
+  <link rel="manifest" href="manifest.json">
   <link rel="stylesheet" href="css/style.css">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%236366f1'><path d='M12 2C6.48 2 2 6.48 2 12c0 1.85.5 3.58 1.38 5.07L2 22l5.07-1.38C8.54 21.49 10.22 22 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2zm1 14h-2v-2h2v2zm0-4h-2V7h2v5z'/></svg>">
 </head>
@@ -349,19 +350,24 @@
     </div>
   </div>
 
+  <!-- Modal 5: Custom In-App Dialog (Alert/Confirm without https://localhost prompt) -->
+  <div id="dialog-modal" class="modal hidden">
+    <div class="modal-backdrop" id="dialog-backdrop"></div>
+    <div class="modal-card" style="max-width: 340px; padding: 20px;">
+      <h3 id="dialog-title" style="margin-bottom: 12px; font-size: 17px; font-weight: 600;">Родня</h3>
+      <p id="dialog-message" style="font-size: 14px; line-height: 1.5; color: var(--text-secondary); margin-bottom: 20px;"></p>
+      <div style="display: flex; gap: 10px; justify-content: flex-end;">
+        <button id="dialog-btn-cancel" class="btn btn-outline" style="min-width: 80px; padding: 8px 14px; font-size: 14px;">Отмена</button>
+        <button id="dialog-btn-ok" class="btn btn-primary" style="min-width: 80px; padding: 8px 14px; font-size: 14px;">ОК</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Audio element for remote WebRTC voice call stream -->
   <audio id="remote-audio" autoplay playsinline></audio>
 
-  <!-- Socket.io client script -->
-  <script src="/socket.io/socket.io.js"></script>
-  <!-- Fallback to CDN if socket.io is not served from local -->
-  <script>
-    if (typeof io === 'undefined') {
-      const script = document.createElement('script');
-      script.src = 'https://cdn.socket.io/4.7.5/socket.io.min.js';
-      document.head.appendChild(script);
-    }
-  </script>
+  <!-- Bundled local Socket.io client script (no CDN race condition) -->
+  <script src="js/socket.io.min.js"></script>
   <script src="js/sound.js"></script>
   <script src="js/webrtc.js"></script>
   <script src="js/voice.js"></script>
