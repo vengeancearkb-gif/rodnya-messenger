@@ -163,7 +163,26 @@ app.post('/api/auth/register', (req, res) => {
   }
 
   if (usersMap.has(cleanUsername)) {
-    return res.status(400).json({ error: 'Пользователь с таким логином уже существует. Выберите другой или войдите.' });
+    const existingUser = usersMap.get(cleanUsername);
+    if (existingUser && password && existingUser.passwordHash) {
+      const checkHash = hashPassword(password, existingUser.salt);
+      if (checkHash === existingUser.passwordHash) {
+        const token = generateToken();
+        existingUser.token = token;
+        if (displayName && displayName.trim()) existingUser.displayName = displayName.trim();
+        if (avatar) existingUser.avatar = avatar;
+        if (bio && bio.trim()) existingUser.bio = bio.trim();
+        existingUser.lastSeen = new Date().toISOString();
+        tokensMap.set(token, cleanUsername);
+        persistUsers();
+        return res.json({
+          ok: true,
+          token,
+          user: sanitizeUser(existingUser)
+        });
+      }
+    }
+    return res.status(400).json({ error: 'Пользователь с таким логином уже существует. Выберите другой или перейдите на вкладку «Вход».' });
   }
 
   const salt = crypto.randomBytes(16).toString('hex');
@@ -239,6 +258,58 @@ app.get('/api/auth/me', (req, res) => {
   }
 
   res.json({ ok: true, user: sanitizeUser(user) });
+});
+
+// Restore or self-heal user session from client storage
+app.post('/api/auth/restore-session', (req, res) => {
+  let { username, password, displayName, avatar, bio, roomId } = req.body;
+  if (!username) {
+    return res.status(400).json({ error: 'Логин обязателен' });
+  }
+
+  const cleanUsername = username.trim().toLowerCase();
+  let user = usersMap.get(cleanUsername);
+
+  if (user) {
+    // If password is set on user record, verify it
+    if (password && user.passwordHash) {
+      const checkHash = hashPassword(password, user.salt);
+      if (checkHash !== user.passwordHash) {
+        return res.status(401).json({ error: 'Неверный пароль' });
+      }
+    }
+    if (displayName && displayName.trim()) user.displayName = displayName.trim();
+    if (avatar) user.avatar = avatar;
+    if (bio && bio.trim()) user.bio = bio.trim();
+    user.lastSeen = new Date().toISOString();
+  } else {
+    // Recreate user on server (self-healing after Render container reset)
+    const salt = crypto.randomBytes(16).toString('hex');
+    const passwordHash = password ? hashPassword(password, salt) : '';
+    user = {
+      id: `u_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      username: cleanUsername,
+      displayName: (displayName && displayName.trim()) ? displayName.trim() : cleanUsername,
+      avatar: avatar || null,
+      bio: (bio && bio.trim()) ? bio.trim() : 'На связи',
+      salt,
+      passwordHash,
+      createdAt: new Date().toISOString(),
+      lastSeen: new Date().toISOString()
+    };
+    usersMap.set(cleanUsername, user);
+  }
+
+  const token = generateToken();
+  user.token = token;
+  tokensMap.set(token, cleanUsername);
+  persistUsers();
+
+  res.json({
+    ok: true,
+    token,
+    user: sanitizeUser(user)
+  });
 });
 
 // Update own profile (name, avatar, bio)
@@ -387,11 +458,48 @@ io.on('connection', (socket) => {
   let currentUser = null;
 
   // User joins a room / family space
-  socket.on('join-room', ({ token, username, displayName, avatar, bio, roomId, isNativeBackground }) => {
+  socket.on('join-room', ({ token, username, displayName, avatar, bio, password, roomId, isNativeBackground }) => {
     const cleanRoomId = (roomId || 'semya').trim().toLowerCase();
 
     // Check if authenticated user by token
-    const dbUser = getUserByToken(token);
+    let dbUser = getUserByToken(token);
+
+    // If token wasn't found (server restarted or client reconnecting), search by username
+    if (!dbUser && username && username !== 'Гость' && username !== 'android') {
+      const cleanUsername = username.trim().toLowerCase();
+      dbUser = usersMap.get(cleanUsername);
+
+      if (!dbUser) {
+        // Self-heal: recreate user record on the server so room immediately has this user!
+        const salt = crypto.randomBytes(16).toString('hex');
+        const tokenToSave = token || generateToken();
+        const passwordHash = password ? hashPassword(password, salt) : '';
+        dbUser = {
+          id: `u_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          username: cleanUsername,
+          displayName: (displayName && displayName.trim()) ? displayName.trim() : cleanUsername,
+          avatar: avatar || null,
+          bio: (bio && bio.trim()) ? bio.trim() : 'На связи',
+          salt,
+          passwordHash,
+          token: tokenToSave,
+          createdAt: new Date().toISOString(),
+          lastSeen: new Date().toISOString()
+        };
+        usersMap.set(cleanUsername, dbUser);
+        tokensMap.set(tokenToSave, cleanUsername);
+        persistUsers();
+      } else {
+        if (displayName && displayName.trim()) dbUser.displayName = displayName.trim();
+        if (avatar) dbUser.avatar = avatar;
+        if (bio && bio.trim()) dbUser.bio = bio.trim();
+        if (token) {
+          dbUser.token = token;
+          tokensMap.set(token, cleanUsername);
+        }
+      }
+    }
+
     let finalUsername = dbUser ? dbUser.username : (username || 'Гость').trim();
     let finalDisplayName = dbUser ? dbUser.displayName : (displayName || finalUsername);
     let finalAvatar = dbUser ? dbUser.avatar : (avatar || null);

@@ -6,6 +6,7 @@ class MessengerApp {
     this.user = JSON.parse(localStorage.getItem('family_user') || 'null');
     this.roomId = localStorage.getItem('family_room') || 'semya';
     this.serverUrl = localStorage.getItem('family_server_url') || 'https://rodnya-messenger.onrender.com';
+    this.savedPassword = localStorage.getItem('family_password') || '';
     this.onlineMembers = [];
     this.pingInterval = null;
 
@@ -14,7 +15,9 @@ class MessengerApp {
     this.editAvatarUrl = null;
 
     this.initDOM();
-    this.checkAutoLogin();
+    this.initProfileFromNative().then(() => {
+      this.checkAutoLogin();
+    });
   }
 
   initDOM() {
@@ -207,26 +210,145 @@ class MessengerApp {
     this.authAlert.textContent = '';
   }
 
-  // Auto Login Check
-  async checkAutoLogin() {
-    if (this.token && this.user) {
+  // Read permanent native profile from Android SharedPreferences if available
+  async initProfileFromNative() {
+    if (window.AndroidApp && window.AndroidApp.getSavedProfile) {
       try {
-        const res = await fetch(`${this.serverUrl}/api/auth/me`, {
-          headers: { 'Authorization': `Bearer ${this.token}` }
+        const raw = window.AndroidApp.getSavedProfile();
+        if (raw && raw.length > 5) {
+          const nativeData = JSON.parse(raw);
+          if (nativeData.username) {
+            if (!this.user || !this.user.username) {
+              this.user = {
+                username: nativeData.username,
+                displayName: nativeData.displayName || nativeData.username,
+                avatar: nativeData.avatar || null,
+                bio: nativeData.bio || 'На связи'
+              };
+            }
+            if (nativeData.token) this.token = nativeData.token;
+            if (nativeData.roomId) this.roomId = nativeData.roomId;
+            if (nativeData.serverUrl) this.serverUrl = nativeData.serverUrl;
+            if (nativeData.password) this.savedPassword = nativeData.password;
+
+            localStorage.setItem('family_user', JSON.stringify(this.user));
+            if (this.token) localStorage.setItem('family_token', this.token);
+            localStorage.setItem('family_room', this.roomId);
+            localStorage.setItem('family_server_url', this.serverUrl);
+            if (this.savedPassword) localStorage.setItem('family_password', this.savedPassword);
+          }
+        }
+      } catch (e) {
+        console.warn('Could not read native profile:', e);
+      }
+    }
+  }
+
+  // Compress avatar image into durable data URL that survives all server redeploys and APK updates
+  compressAvatar(file, maxSize = 256, quality = 0.85) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          let width = img.width;
+          let height = img.height;
+          if (width > height) {
+            if (width > maxSize) {
+              height = Math.round((height * maxSize) / width);
+              width = maxSize;
+            }
+          } else {
+            if (height > maxSize) {
+              width = Math.round((width * maxSize) / height);
+              height = maxSize;
+            }
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        };
+        img.onerror = () => reject(new Error('Не удалось прочитать изображение'));
+        img.src = e.target.result;
+      };
+      reader.onerror = () => reject(new Error('Не удалось загрузить файл'));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // Avatar Upload Helper (converts to permanent compressed data URL)
+  async uploadAvatar(e, type) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    try {
+      const dataUrl = await this.compressAvatar(file, 256, 0.85);
+
+      if (type === 'reg') {
+        this.regAvatarUrl = dataUrl;
+        this.regAvatarPreview.innerHTML = `<img src="${dataUrl}" alt="Аватар">`;
+      } else {
+        this.editAvatarUrl = dataUrl;
+        this.editAvatarPreview.innerHTML = `<img src="${dataUrl}" alt="Аватар">`;
+      }
+    } catch (err) {
+      alert('Не удалось обработать фото: ' + err.message);
+    }
+  }
+
+  // Auto Login Check with Self-Healing Persistence
+  async checkAutoLogin() {
+    if (this.user && this.user.username) {
+      // 1. Try existing token
+      if (this.token) {
+        try {
+          const res = await fetch(`${this.serverUrl}/api/auth/me`, {
+            headers: { 'Authorization': `Bearer ${this.token}` }
+          });
+          if (res.ok) {
+            const data = await res.json();
+            this.user = data.user;
+            this.saveAllCredentials();
+            this.enterMessenger();
+            return;
+          }
+        } catch (e) {
+          console.warn('Auto-login verification failed:', e);
+        }
+      }
+
+      // 2. Token invalid or server wiped (Render redeploy) -> Self-heal and restore session!
+      try {
+        const res = await fetch(`${this.serverUrl}/api/auth/restore-session`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: this.user.username,
+            password: this.savedPassword || '',
+            displayName: this.user.displayName || this.user.username,
+            avatar: this.user.avatar || null,
+            bio: this.user.bio || 'На связи',
+            roomId: this.roomId || 'semya'
+          })
         });
+
         if (res.ok) {
           const data = await res.json();
+          this.token = data.token;
           this.user = data.user;
-          localStorage.setItem('family_user', JSON.stringify(this.user));
+          this.saveAllCredentials();
           this.enterMessenger();
           return;
         }
       } catch (e) {
-        console.warn('Auto-login verification failed:', e);
+        console.warn('Session restoration failed:', e);
       }
     }
 
-    // Default values in inputs
+    // Default values in inputs if not logged in
     this.loginServerUrl.value = this.serverUrl;
     this.regServerUrl.value = this.serverUrl;
     this.loginRoom.value = this.roomId;
@@ -270,12 +392,8 @@ class MessengerApp {
 
       this.token = data.token;
       this.user = data.user;
-
-      localStorage.setItem('family_token', this.token);
-      localStorage.setItem('family_user', JSON.stringify(this.user));
-      localStorage.setItem('family_room', this.roomId);
-      localStorage.setItem('family_server_url', this.serverUrl);
-
+      this.savedPassword = password;
+      this.saveAllCredentials();
       this.enterMessenger();
     } catch (err) {
       this.showAlert(err.message);
@@ -311,61 +429,54 @@ class MessengerApp {
 
       this.token = data.token;
       this.user = data.user;
-
-      localStorage.setItem('family_token', this.token);
-      localStorage.setItem('family_user', JSON.stringify(this.user));
-      localStorage.setItem('family_room', this.roomId);
-      localStorage.setItem('family_server_url', this.serverUrl);
-
+      this.savedPassword = password;
+      this.saveAllCredentials();
       this.enterMessenger();
     } catch (err) {
       this.showAlert(err.message);
     }
   }
 
-  // Avatar Upload Helper
-  async uploadAvatar(e, type) {
-    const file = e.target.files[0];
-    if (!file) return;
+  saveAllCredentials() {
+    if (this.token) localStorage.setItem('family_token', this.token);
+    if (this.user) localStorage.setItem('family_user', JSON.stringify(this.user));
+    if (this.roomId) localStorage.setItem('family_room', this.roomId);
+    if (this.serverUrl) localStorage.setItem('family_server_url', this.serverUrl);
+    if (this.savedPassword) localStorage.setItem('family_password', this.savedPassword);
 
-    const formData = new FormData();
-    formData.append('file', file);
-
-    try {
-      const res = await fetch(`${this.serverUrl}/api/upload`, {
-        method: 'POST',
-        body: formData
-      });
-      if (!res.ok) throw new Error('Ошибка загрузки фото');
-      const data = await res.json();
-
-      const fullUrl = this.getFullMediaUrl(data.url);
-
-      if (type === 'reg') {
-        this.regAvatarUrl = data.url;
-        this.regAvatarPreview.innerHTML = `<img src="${fullUrl}" alt="Аватар">`;
-      } else {
-        this.editAvatarUrl = data.url;
-        this.editAvatarPreview.innerHTML = `<img src="${fullUrl}" alt="Аватар">`;
+    if (window.AndroidApp) {
+      if (window.AndroidApp.saveProfile) {
+        try {
+          const profileData = {
+            serverUrl: this.serverUrl || 'https://rodnya-messenger.onrender.com',
+            token: this.token || '',
+            roomId: this.roomId || 'semya',
+            username: this.user ? this.user.username : '',
+            displayName: this.user ? (this.user.displayName || this.user.username) : '',
+            avatar: this.user ? (this.user.avatar || '') : '',
+            bio: this.user ? (this.user.bio || '') : '',
+            password: this.savedPassword || ''
+          };
+          window.AndroidApp.saveProfile(JSON.stringify(profileData));
+        } catch (e) {
+          console.error('Error saving profile to AndroidApp:', e);
+        }
+      } else if (window.AndroidApp.saveCredentials) {
+        try {
+          window.AndroidApp.saveCredentials(
+            this.serverUrl || 'https://rodnya-messenger.onrender.com',
+            this.token || '',
+            this.roomId || 'semya',
+            this.user ? this.user.username : '',
+            this.user ? (this.user.displayName || this.user.username) : ''
+          );
+        } catch (e) {}
       }
-    } catch (err) {
-      alert('Не удалось загрузить фото: ' + err.message);
     }
   }
 
   syncNativeCredentials() {
-    if (window.AndroidApp && window.AndroidApp.saveCredentials) {
-      try {
-        const url = this.serverUrl || window.location.origin || 'https://rodnya-messenger.onrender.com';
-        const tok = this.token || '';
-        const room = this.roomId || 'semya';
-        const uName = this.user ? this.user.username : '';
-        const dName = this.user ? (this.user.displayName || this.user.username) : '';
-        window.AndroidApp.saveCredentials(url, tok, room, uName, dName);
-      } catch (e) {
-        console.error('Error syncing credentials with AndroidApp:', e);
-      }
-    }
+    this.saveAllCredentials();
   }
 
   enterMessenger() {
@@ -437,9 +548,10 @@ class MessengerApp {
       this.socket.emit('join-room', {
         token: this.token,
         username: this.user ? this.user.username : 'Гость',
-        displayName: this.user ? this.user.displayName : 'Гость',
+        displayName: this.user ? (this.user.displayName || this.user.username) : 'Гость',
         avatar: this.user ? this.user.avatar : null,
         bio: this.user ? this.user.bio : '',
+        password: this.savedPassword || '',
         roomId: this.roomId
       });
     });
@@ -909,9 +1021,12 @@ class MessengerApp {
 
   getFullMediaUrl(path) {
     if (!path) return '';
-    if (path.startsWith('http://') || path.startsWith('https://')) return path;
+    if (path.startsWith('data:') || path.startsWith('http://') || path.startsWith('https://') || path.startsWith('blob:')) {
+      return path;
+    }
     const base = this.serverUrl || window.location.origin;
-    return `${base.replace(/\/$/, '')}${path}`;
+    const cleanPath = path.startsWith('/') ? path : `/${path}`;
+    return `${base.replace(/\/$/, '')}${cleanPath}`;
   }
 
   formatBytes(bytes) {

@@ -147,6 +147,9 @@ public class MessengerBackgroundService extends Service {
             String roomId = prefs.getString("roomId", "semya");
             String username = prefs.getString("username", "android");
             String displayName = prefs.getString("displayName", "Android");
+            String avatar = prefs.getString("avatar", "");
+            String bio = prefs.getString("bio", "На связи");
+            String password = prefs.getString("password", "");
 
             if (socket != null) {
                 socket.disconnect();
@@ -169,6 +172,9 @@ public class MessengerBackgroundService extends Service {
                     joinData.put("token", token);
                     joinData.put("username", username);
                     joinData.put("displayName", displayName);
+                    joinData.put("avatar", avatar);
+                    joinData.put("bio", bio);
+                    joinData.put("password", password);
                     joinData.put("roomId", roomId);
                     joinData.put("isNativeBackground", true);
                     socket.emit("join-room", joinData);
