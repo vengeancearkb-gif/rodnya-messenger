@@ -6,6 +6,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.media.AudioDeviceInfo;
 import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Build;
@@ -104,18 +105,61 @@ public class MainActivity extends BridgeActivity {
         }
 
         @JavascriptInterface
+        public void setSpeakerphone(boolean enabled) {
+            runOnUiThread(() -> {
+                try {
+                    AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+                    if (am == null) return;
+                    am.setMode(AudioManager.MODE_IN_COMMUNICATION);
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        if (enabled) {
+                            List<AudioDeviceInfo> devices = am.getAvailableCommunicationDevices();
+                            for (AudioDeviceInfo device : devices) {
+                                if (device.getType() == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER) {
+                                    am.setCommunicationDevice(device);
+                                    break;
+                                }
+                            }
+                        } else {
+                            am.clearCommunicationDevice();
+                        }
+                    }
+                    am.setSpeakerphoneOn(enabled);
+                } catch (Exception ignored) {}
+            });
+        }
+
+        @JavascriptInterface
         public void setCallAudioMode(boolean inCall) {
             runOnUiThread(() -> {
                 try {
                     AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-                    if (am != null) {
-                        if (inCall) {
-                            am.setMode(AudioManager.MODE_IN_COMMUNICATION);
-                            am.setSpeakerphoneOn(true);
-                        } else {
-                            am.setMode(AudioManager.MODE_NORMAL);
-                            am.setSpeakerphoneOn(false);
+                    if (am == null) return;
+                    if (inCall) {
+                        am.setMode(AudioManager.MODE_IN_COMMUNICATION);
+                        // Default to speakerphone on call (loudspeaker)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            List<AudioDeviceInfo> devices = am.getAvailableCommunicationDevices();
+                            for (AudioDeviceInfo device : devices) {
+                                if (device.getType() == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER) {
+                                    am.setCommunicationDevice(device);
+                                    break;
+                                }
+                            }
                         }
+                        am.setSpeakerphoneOn(true);
+
+                        // Ensure maximum audio clarity and adequate speakerphone volume
+                        int maxVoice = am.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL);
+                        am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, (int)(maxVoice * 0.9), 0);
+                        int maxMusic = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+                        am.setStreamVolume(AudioManager.STREAM_MUSIC, (int)(maxMusic * 0.9), 0);
+                    } else {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            am.clearCommunicationDevice();
+                        }
+                        am.setSpeakerphoneOn(false);
+                        am.setMode(AudioManager.MODE_NORMAL);
                     }
                 } catch (Exception ignored) {}
             });

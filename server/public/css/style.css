@@ -1009,6 +1009,17 @@ body {
   color: black;
 }
 
+.speaker-btn {
+  background-color: var(--bg-input);
+  color: var(--text-main);
+}
+
+.speaker-btn.active {
+  background-color: var(--primary);
+  color: white;
+  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.4);
+}
+
 .end-call-btn {
   background-color: var(--danger);
   color: white;

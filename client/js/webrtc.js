@@ -24,6 +24,7 @@ class CallManager {
     this.nextPlaybackTime = 0;
     this.remoteAudioCtx = null;
     this.remoteSourceNode = null;
+    this.isSpeakerOn = true;
 
     // High quality public STUN & TURN servers for international NAT traversal (including mobile 4G/5G)
     this.rtcConfig = {
@@ -59,6 +60,7 @@ class CallManager {
     this.callTimer = document.getElementById('call-timer');
     this.btnUnmuteCall = document.getElementById('btn-unmute-call');
     this.btnToggleMic = document.getElementById('btn-toggle-mic');
+    this.btnToggleSpeaker = document.getElementById('btn-toggle-speaker');
     this.btnEndCall = document.getElementById('btn-end-call');
 
     this.incomingDialog = document.getElementById('incoming-call-dialog');
@@ -70,6 +72,9 @@ class CallManager {
 
     // Attach listeners
     this.btnToggleMic.addEventListener('click', () => this.toggleMic());
+    if (this.btnToggleSpeaker) {
+      this.btnToggleSpeaker.addEventListener('click', () => this.toggleSpeaker());
+    }
     this.btnEndCall.addEventListener('click', () => this.endCall(true));
     this.btnAcceptCall.addEventListener('click', () => this.acceptIncomingCall());
     this.btnRejectCall.addEventListener('click', () => this.rejectIncomingCall());
@@ -647,6 +652,23 @@ class CallManager {
     }
   }
 
+  // Toggle speakerphone (loudspeaker vs earpiece)
+  toggleSpeaker() {
+    this.isSpeakerOn = !this.isSpeakerOn;
+    if (this.btnToggleSpeaker) {
+      if (this.isSpeakerOn) {
+        this.btnToggleSpeaker.classList.add('active');
+        this.btnToggleSpeaker.title = 'Громкая связь: включена';
+      } else {
+        this.btnToggleSpeaker.classList.remove('active');
+        this.btnToggleSpeaker.title = 'Громкая связь: выключена';
+      }
+    }
+    if (window.AndroidApp && window.AndroidApp.setSpeakerphone) {
+      window.AndroidApp.setSpeakerphone(this.isSpeakerOn);
+    }
+  }
+
   // Start in-call duration timer
   startCallTimer() {
     if (this.callTimerInterval) return; // Already running
@@ -667,6 +689,11 @@ class CallManager {
     this.callTimer.textContent = '00:00';
     this.isMuted = false;
     this.btnToggleMic.classList.remove('muted');
+    this.isSpeakerOn = true;
+    if (this.btnToggleSpeaker) {
+      this.btnToggleSpeaker.classList.add('active');
+      this.btnToggleSpeaker.title = 'Громкая связь: включена';
+    }
 
     const callAvatarBox = document.getElementById('call-avatar-box');
     if (callAvatarBox) {
