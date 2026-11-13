@@ -3,6 +3,8 @@
   "appName": "Родня",
   "webDir": "client",
   "server": {
-    "androidScheme": "https"
+    "androidScheme": "https",
+    "cleartext": true,
+    "allowMixedContent": true
   }
 }

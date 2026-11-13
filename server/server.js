@@ -943,6 +943,51 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Relay live audio stream fallback if WebRTC P2P direct NAT traversal fails
+  socket.on('call-audio-chunk', ({ targetUserId, targetUsername, chunk }) => {
+    if (!chunk) return;
+    if (activeCallPairs.has(socket.id)) {
+      const pair = activeCallPairs.get(socket.id);
+      return io.to(pair.peerSocketId).emit('call-audio-chunk', {
+        fromUserId: socket.id,
+        chunk
+      });
+    }
+    if (targetUserId) {
+      io.to(targetUserId).emit('call-audio-chunk', {
+        fromUserId: socket.id,
+        chunk
+      });
+    } else if (targetUsername) {
+      const cleanTarget = targetUsername.trim().toLowerCase();
+      for (const [sId, u] of onlineUsers.entries()) {
+        if (u.username.toLowerCase() === cleanTarget && sId !== socket.id) {
+          io.to(sId).emit('call-audio-chunk', {
+            fromUserId: socket.id,
+            chunk
+          });
+        }
+      }
+    }
+  });
+
+  socket.on('call-audio-relay-start', ({ targetUserId, targetUsername }) => {
+    if (activeCallPairs.has(socket.id)) {
+      const pair = activeCallPairs.get(socket.id);
+      return io.to(pair.peerSocketId).emit('call-audio-relay-start', { fromUserId: socket.id });
+    }
+    if (targetUserId) {
+      io.to(targetUserId).emit('call-audio-relay-start', { fromUserId: socket.id });
+    } else if (targetUsername) {
+      const cleanTarget = targetUsername.trim().toLowerCase();
+      for (const [sId, u] of onlineUsers.entries()) {
+        if (u.username.toLowerCase() === cleanTarget && sId !== socket.id) {
+          io.to(sId).emit('call-audio-relay-start', { fromUserId: socket.id });
+        }
+      }
+    }
+  });
+
   socket.on('disconnect', () => {
     pendingCallCandidates.delete(socket.id);
     // If user was in an active call, notify the other peer immediately!

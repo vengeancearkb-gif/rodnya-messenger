@@ -769,6 +769,8 @@ class MessengerApp {
     this.socket.on('call-rejected', (data) => window.callManager.handleCallRejected(data));
     this.socket.on('call-ended', (data) => window.callManager.endCall(false));
     this.socket.on('ice-candidate', (data) => window.callManager.handleIceCandidate(data));
+    this.socket.on('call-audio-chunk', (data) => window.callManager.handleSocketAudioChunk(data.chunk));
+    this.socket.on('call-audio-relay-start', () => window.callManager.startSocketAudioRelay(false));
     this.socket.on('call-busy', (data) => this.showDialog(data.message || 'Собеседник занят другим звонком'));
     this.socket.on('call-error', (data) => this.showDialog(data.message || 'Ошибка соединения'));
   }

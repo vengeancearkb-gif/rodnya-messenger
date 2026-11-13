@@ -15,6 +15,13 @@ class CallManager {
     this.isMuted = false;
     this.isCaller = false;
     this.iceRestartAttempted = false;
+    this.socketRelayActive = false;
+    this.relayCheckTimer = null;
+    this.relaySendContext = null;
+    this.relayPlayContext = null;
+    this.relayMicSource = null;
+    this.relayProcessor = null;
+    this.nextPlaybackTime = 0;
 
     // High quality public STUN & TURN servers for international NAT traversal (including mobile 4G/5G)
     this.rtcConfig = {
@@ -246,6 +253,7 @@ class CallManager {
     this.pendingOffer = null;
     this.isCaller = false;
     this.iceRestartAttempted = false;
+    this.stopSocketAudioRelay();
     this.localCandidates = [];
 
     try {
@@ -423,21 +431,30 @@ class CallManager {
 
       if (state === 'connected' || iceState === 'connected' || iceState === 'completed') {
         this.clearTimeouts();
+        if (this.relayCheckTimer) {
+          clearTimeout(this.relayCheckTimer);
+          this.relayCheckTimer = null;
+        }
         this.callStatusLabel.textContent = 'Идёт разговор';
         this.unlockAndPlayAudio();
         this.startCallTimer();
       } else if (iceState === 'checking') {
         this.callStatusLabel.textContent = 'Установка защищённого соединения...';
-      } else if (state === 'failed' || iceState === 'failed') {
-        if (this.peerConnection && this.isCaller && !this.iceRestartAttempted) {
-          this.iceRestartAttempted = true;
-          this.callStatusLabel.textContent = 'Переподключение связи...';
-          this.restartIce();
-        } else {
-          this.callStatusLabel.textContent = 'Ошибка P2P соединения';
+        if (!this.relayCheckTimer) {
+          this.relayCheckTimer = setTimeout(() => {
+            if (this.peerConnection && this.peerConnection.connectionState !== 'connected') {
+              console.warn('P2P connection slow/blocked by NAT. Activating audio relay fallback...');
+              this.startSocketAudioRelay(true);
+            }
+          }, 4500);
         }
+      } else if (state === 'failed' || iceState === 'failed') {
+        console.warn('P2P connection failed. Switching to Socket Audio Relay...');
+        this.startSocketAudioRelay(true);
       } else if (state === 'disconnected' || iceState === 'disconnected') {
-        this.callStatusLabel.textContent = 'Переподключение связи...';
+        if (!this.socketRelayActive) {
+          this.callStatusLabel.textContent = 'Переподключение связи...';
+        }
       } else if (state === 'closed') {
         this.endCall(false);
       }
@@ -445,6 +462,127 @@ class CallManager {
 
     this.peerConnection.onconnectionstatechange = updateConnectionStatus;
     this.peerConnection.oniceconnectionstatechange = updateConnectionStatus;
+  }
+
+  // Fallback Audio Relay via Server Socket (guarantees voice call through any carrier/NAT)
+  startSocketAudioRelay(notifyPeer = true) {
+    if (this.socketRelayActive) return;
+    this.socketRelayActive = true;
+    console.log('Activating Socket Audio Relay fallback...');
+    this.callStatusLabel.textContent = 'Идёт разговор (Защищённый релей)';
+    this.startCallTimer();
+
+    if (notifyPeer && this.currentCallTarget && window.messengerApp && window.messengerApp.socket) {
+      window.messengerApp.socket.emit('call-audio-relay-start', {
+        targetUserId: this.currentCallTarget.id,
+        targetUsername: this.currentCallTarget.username || ''
+      });
+    }
+
+    if (this.localStream) {
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) return;
+        this.relaySendContext = new AudioCtx({ sampleRate: 16000 });
+        if (this.relaySendContext.state === 'suspended') {
+          this.relaySendContext.resume().catch(() => {});
+        }
+        this.relayMicSource = this.relaySendContext.createMediaStreamSource(this.localStream);
+
+        this.relayProcessor = this.relaySendContext.createScriptProcessor(4096, 1, 1);
+        this.relayProcessor.onaudioprocess = (e) => {
+          if (!this.socketRelayActive || this.isMuted) return;
+          const inputData = e.inputBuffer.getChannelData(0);
+          const pcm = new Int16Array(inputData.length);
+          for (let i = 0; i < inputData.length; i++) {
+            let s = Math.max(-1, Math.min(1, inputData[i]));
+            pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+          }
+          // Silence output buffer so mic isn't fed back to user speakers
+          const outputData = e.outputBuffer.getChannelData(0);
+          outputData.fill(0);
+
+          if (this.currentCallTarget && window.messengerApp && window.messengerApp.socket) {
+            window.messengerApp.socket.emit('call-audio-chunk', {
+              targetUserId: this.currentCallTarget.id,
+              targetUsername: this.currentCallTarget.username || '',
+              chunk: pcm.buffer
+            });
+          }
+        };
+
+        // Connect through silent gain node to destination to keep ScriptProcessor running without local echo
+        const silentGain = this.relaySendContext.createGain();
+        silentGain.gain.value = 0;
+        this.relayMicSource.connect(this.relayProcessor);
+        this.relayProcessor.connect(silentGain);
+        silentGain.connect(this.relaySendContext.destination);
+      } catch (err) {
+        console.warn('Error starting relay audio sender:', err);
+      }
+    }
+  }
+
+  handleSocketAudioChunk(buffer) {
+    if (!buffer) return;
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!this.relayPlayContext && AudioCtx) {
+        this.relayPlayContext = new AudioCtx({ sampleRate: 16000 });
+      }
+      if (this.relayPlayContext && this.relayPlayContext.state === 'suspended') {
+        this.relayPlayContext.resume().catch(() => {});
+      }
+
+      const pcm = new Int16Array(buffer);
+      const float32 = new Float32Array(pcm.length);
+      for (let i = 0; i < pcm.length; i++) {
+        float32[i] = pcm[i] / 32768.0;
+      }
+
+      const audioBuffer = this.relayPlayContext.createBuffer(1, float32.length, 16000);
+      audioBuffer.getChannelData(0).set(float32);
+
+      const source = this.relayPlayContext.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(this.relayPlayContext.destination);
+
+      const now = this.relayPlayContext.currentTime;
+      // Clamp playback time to avoid lag build-up (keep latency under 250ms)
+      if (this.nextPlaybackTime < now || this.nextPlaybackTime > now + 0.3) {
+        this.nextPlaybackTime = now + 0.05;
+      }
+      source.start(this.nextPlaybackTime);
+      this.nextPlaybackTime += audioBuffer.duration;
+    } catch (e) {
+      console.warn('Relay audio playback error:', e);
+    }
+  }
+
+  stopSocketAudioRelay() {
+    this.socketRelayActive = false;
+    if (this.relayCheckTimer) {
+      clearTimeout(this.relayCheckTimer);
+      this.relayCheckTimer = null;
+    }
+    if (this.relayProcessor) {
+      this.relayProcessor.onaudioprocess = null;
+      try { this.relayProcessor.disconnect(); } catch (e) {}
+      this.relayProcessor = null;
+    }
+    if (this.relayMicSource) {
+      try { this.relayMicSource.disconnect(); } catch (e) {}
+      this.relayMicSource = null;
+    }
+    if (this.relaySendContext) {
+      try { this.relaySendContext.close(); } catch (e) {}
+      this.relaySendContext = null;
+    }
+    if (this.relayPlayContext) {
+      try { this.relayPlayContext.close(); } catch (e) {}
+      this.relayPlayContext = null;
+    }
+    this.nextPlaybackTime = 0;
   }
 
   async restartIce() {
@@ -558,6 +696,7 @@ class CallManager {
     this.pendingOffer = null;
     this.isCaller = false;
     this.iceRestartAttempted = false;
+    this.stopSocketAudioRelay();
     if (this.btnUnmuteCall) this.btnUnmuteCall.classList.add('hidden');
     this.callScreen.classList.add('hidden');
     this.incomingDialog.classList.add('hidden');
