@@ -15,6 +15,7 @@
   --radius-lg: 16px;
   --radius-md: 10px;
   --radius-full: 9999px;
+  --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 
@@ -300,13 +301,14 @@ body {
 
 /* ================= Header ================= */
 .app-header {
-  height: 60px;
+  height: calc(62px + var(--safe-top));
+  min-height: calc(62px + var(--safe-top));
   background-color: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
-  padding: 0 12px;
+  padding: 0 12px 10px 12px;
   z-index: 10;
   flex-shrink: 0;
 }
@@ -435,11 +437,12 @@ body {
 }
 
 .drawer-header {
-  height: 60px;
+  height: calc(62px + var(--safe-top));
+  min-height: calc(62px + var(--safe-top));
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
-  padding: 0 16px;
+  padding: 0 16px 10px 16px;
   border-bottom: 1px solid var(--border);
 }
 
